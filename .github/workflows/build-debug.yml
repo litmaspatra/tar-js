@@ -1,0 +1,63 @@
+name: Build TAR-JS Debug APK
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-debug.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout CI host
+        uses: actions/checkout@v4
+
+      - name: Reconstruct TAR-JS source bundle
+        shell: bash
+        run: |
+          cat             ci/source_00.b64             ci/source_01.b64             ci/source_02.b64             ci/tail_00.b64             ci/fix01_00.b64             ci/fix01_01.b64             ci/tail_02.b64             ci/tail_03.b64             ci/tail_04.b64             ci/fix05_00.b64             ci/fix05_01.b64             ci/fix06_00.b64             > /tmp/tarjs.b64
+          test "$(wc -c < /tmp/tarjs.b64)" -eq 67632
+          base64 --decode /tmp/tarjs.b64 > /tmp/tarjs.zip
+          echo "f98f632a03965e5ff1b0498dc4adc1bfa202cab8689ecfc0394e7cd11f76c69c  /tmp/tarjs.zip" | sha256sum -c -
+          mkdir -p tarjs
+          unzip -q /tmp/tarjs.zip -d tarjs
+          test -f tarjs/settings.gradle.kts
+          test -f tarjs/app/build.gradle.kts
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 36
+        shell: bash
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Build debug APK
+        working-directory: tarjs
+        shell: bash
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-debug
+          path: tarjs/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
