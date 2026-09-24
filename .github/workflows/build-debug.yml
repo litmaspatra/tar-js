@@ -22,7 +22,20 @@ jobs:
       - name: Reconstruct TAR-JS source bundle
         shell: bash
         run: |
-          cat             ci/source_00.b64             ci/source_01.b64             ci/source_02.b64             ci/tail_00.b64             ci/fix01_00.b64             ci/fix01_01.b64             ci/tail_02.b64             ci/tail_03.b64             ci/tail_04.b64             ci/fix05_00.b64             ci/fix05_01.b64             ci/fix06_00.b64             > /tmp/tarjs.b64
+          cat \
+            ci/source_00.b64 \
+            ci/source_01.b64 \
+            ci/source_02.b64 \
+            ci/tail_00.b64 \
+            ci/fix01_00.b64 \
+            ci/fix01_01.b64 \
+            ci/tail_02.b64 \
+            ci/tail_03.b64 \
+            ci/tail_04.b64 \
+            ci/fix05_00.b64 \
+            ci/fix05_01.b64 \
+            ci/fix06_00.b64 \
+            > /tmp/tarjs.b64
           test "$(wc -c < /tmp/tarjs.b64)" -eq 67632
           base64 --decode /tmp/tarjs.b64 > /tmp/tarjs.zip
           echo "f98f632a03965e5ff1b0498dc4adc1bfa202cab8689ecfc0394e7cd11f76c69c  /tmp/tarjs.zip" | sha256sum -c -
@@ -42,12 +55,18 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android API 36
+      - name: Prepare preinstalled Android SDK
         shell: bash
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          fi
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
       - name: Build debug APK
         working-directory: tarjs
