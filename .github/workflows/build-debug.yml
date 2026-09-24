@@ -68,6 +68,21 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
+      - name: Apply TAR-JS Kotlin 2.3 build fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("tarjs/app/build.gradle.kts")
+          s = p.read_text()
+          s = s.replace('    kotlinOptions { jvmTarget = "17" }\n', '')
+          s = s.replace(
+              '\n\ndependencies {',
+              '\nkotlin {\n    compilerOptions {\n        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)\n    }\n}\n\ndependencies {'
+          )
+          p.write_text(s)
+          PY
+
       - name: Build debug APK
         working-directory: tarjs
         shell: bash
