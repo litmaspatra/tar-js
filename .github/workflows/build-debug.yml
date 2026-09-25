@@ -68,6 +68,86 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
+      - name: Set up Go for embedded rclone
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Build embedded rclone gomobile AAR
+        shell: bash
+        run: |
+          git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git /tmp/rclone
+          cd /tmp/rclone
+
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-}"
+          if [ -z "$ANDROID_NDK_HOME" ] || [ ! -d "$ANDROID_NDK_HOME" ]; then
+            ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+            export ANDROID_NDK_HOME
+          fi
+          export ANDROID_NDK="$ANDROID_NDK_HOME"
+          test -d "$ANDROID_NDK_HOME"
+          echo "Using Android NDK: $ANDROID_NDK_HOME"
+
+          go install golang.org/x/mobile/cmd/gobind@latest
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          export PATH="$PATH:$HOME/go/bin"
+          gomobile init
+
+          VERSION="v1.75.1"
+          gomobile bind \
+            -androidapi 26 \
+            -target=android/arm64 \
+            -javapkg=org.rclone \
+            -ldflags "-s -X github.com/rclone/rclone/fs.Version=$VERSION" \
+            -o gomobile.aar \
+            github.com/rclone/rclone/librclone/gomobile
+
+          mkdir -p "$GITHUB_WORKSPACE/tarjs/app/libs"
+          cp gomobile.aar "$GITHUB_WORKSPACE/tarjs/app/libs/gomobile.aar"
+
+          rm -rf /tmp/gomobile-check
+          mkdir -p /tmp/gomobile-check
+          cd /tmp/gomobile-check
+          unzip -q "$GITHUB_WORKSPACE/tarjs/app/libs/gomobile.aar"
+          test -f classes.jar
+          jar tf classes.jar | grep -q '^org/rclone/gomobile/Gomobile.class
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("tarjs/app/build.gradle.kts")
+          s = p.read_text()
+          s = s.replace('    kotlinOptions { jvmTarget = "17" }\n', '')
+          s = s.replace(
+              '\n\ndependencies {',
+              '\nkotlin {\n    compilerOptions {\n        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)\n    }\n}\n\ndependencies {'
+          )
+          p.write_text(s)
+          PY
+
+      - name: Build debug APK
+        working-directory: tarjs
+        shell: bash
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify APK contains rclone native engine
+        shell: bash
+        run: |
+          unzip -l tarjs/app/build/outputs/apk/debug/app-debug.apk | grep -q 'lib/arm64-v8a/libgojni.so'
+          echo "APK contains embedded rclone libgojni.so."
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-debug
+          path: tarjs/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+          test -f jni/arm64-v8a/libgojni.so
+          echo "Embedded rclone AAR verified."
+
       - name: Apply TAR-JS Kotlin 2.3 build fix
         shell: bash
         run: |
