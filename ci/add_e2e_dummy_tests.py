@@ -108,7 +108,7 @@ s = p.read_text()
 if "testOptions {" not in s:
     s = s.replace(
         '    packaging { resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*") }',
-        "    packaging { resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*") }\n    testOptions { unitTests.isIncludeAndroidResources = true }"
+        '''    packaging { resources.excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*") }\n    testOptions { unitTests.isIncludeAndroidResources = true }'''
     )
 if 'testImplementation("junit:junit:4.13.2")' not in s:
     s = s.replace(
