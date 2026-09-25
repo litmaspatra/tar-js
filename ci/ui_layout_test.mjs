@@ -26,6 +26,7 @@ async function setup(page,hasArchives=true,pin=false){
   await page.evaluateOnNewDocument((archives,chats,messages,hasArchives,pin)=>{
     window.TARJS={
       getAppPrefs:()=>JSON.stringify({pinEnabled:pin,displayName:'Me',senderId:'user999',hasProfilePhoto:false}),
+      getOwner:()=>JSON.stringify({id:'user999',name:'Me'}),
       listArchives:()=>JSON.stringify(hasArchives?archives:[]),
       listChats:()=>JSON.stringify(chats),
       getMessages:()=>JSON.stringify(messages),
