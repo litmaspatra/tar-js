@@ -218,3 +218,46 @@ res = Path("tarjs/app/src/main/res")
 (res/"values/colors.xml").write_text('''<resources><color name="tarjs_blue">#3390EC</color><color name="tarjs_bg">#F4F6F8</color></resources>''')
 (res/"mipmap-anydpi-v26/ic_launcher.xml").write_text('''<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/tarjs_blue"/><foreground android:drawable="@drawable/ic_tarjs_foreground"/></adaptive-icon>''')
 (res/"mipmap-anydpi-v26/ic_launcher_round.xml").write_text('''<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@color/tarjs_blue"/><foreground android:drawable="@drawable/ic_tarjs_foreground"/></adaptive-icon>''')
+
+# App icon, light/dark system bars, and Android 12+ splash.
+manifest = Path("tarjs/app/src/main/AndroidManifest.xml")
+ms = manifest.read_text()
+if 'android:icon="@mipmap/ic_launcher"' not in ms:
+    ms = ms.replace('android:label="TAR-JS"', 'android:label="TAR-JS"\n        android:icon="@mipmap/ic_launcher"\n        android:roundIcon="@mipmap/ic_launcher_round"')
+manifest.write_text(ms)
+(res/"values/styles.xml").write_text('''<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">#3390EC</item>
+        <item name="android:navigationBarColor">#F4F6F8</item>
+        <item name="android:statusBarColor">#F4F6F8</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>''')
+(res/"../values-night").mkdir(parents=True, exist_ok=True)
+(res/"../values-night/styles.xml").write_text('''<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">#5AAAF3</item>
+        <item name="android:navigationBarColor">#11161C</item>
+        <item name="android:statusBarColor">#11161C</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>''')
+v31 = res/"../values-v31"
+v31.mkdir(parents=True, exist_ok=True)
+(v31/"styles.xml").write_text('''<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:navigationBarColor">#F4F6F8</item>
+        <item name="android:statusBarColor">#F4F6F8</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowSplashScreenBackground">#3390EC</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_tarjs_foreground</item>
+    </style>
+</resources>''')
