@@ -67,6 +67,8 @@ jobs:
         shell: bash
         run: |
           node --check tarjs/app/src/main/assets/web/app.js
+          echo '--- IDENTITY TRACE ---'
+          grep -nE 'getAppPrefs|getOwner|senderId|displayName|isMine|messageSide|message\.out' tarjs/app/src/main/assets/web/app.js | head -40 || true
           fail=0
           check() { if grep -q -- "$1" "$2"; then echo "PASS $1"; else echo "MISSING $1"; fail=1; fi; }
           check '--c-primary:' tarjs/app/src/main/assets/web/styles.css
