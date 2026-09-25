@@ -54,8 +54,6 @@ jobs:
           python3 ci/patch_bulk_import.py
           python3 ci/patch_telegram_schema.py
           python3 ci/patch_owner_identity.py
-          python3 ci/patch_ui_chat.py
-          cat ci/ui_override.css >> tarjs/app/src/main/assets/web/styles.css
           python3 ci/add_e2e_dummy_tests.py
           python3 ci/patch_ui_native.py
 
