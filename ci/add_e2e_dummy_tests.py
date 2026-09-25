@@ -164,18 +164,18 @@ class TelegramImporterSmokeTest {
         assertEquals(6, result.messages)
         assertTrue(progress.isNotEmpty())
 
-        val chats = db.chatJson(id)
+        val chats = org.json.JSONArray(db.chatsJson(id))
         assertEquals(1, chats.length())
         assertEquals("Alice Test", chats.getJSONObject(0).getString("name"))
 
-        val search = db.searchJson(id, "archive", 20)
+        val search = org.json.JSONArray(db.searchJson(id, "archive", 20))
         assertTrue("FTS should find hello archive", search.length() >= 1)
 
-        val searchDoc = db.searchJson(id, "important", 20)
+        val searchDoc = org.json.JSONArray(db.searchJson(id, "important", 20))
         assertTrue("FTS should find document caption", searchDoc.length() >= 1)
 
         val chatId = chats.getJSONObject(0).getLong("id")
-        val messages = db.messageJson(chatId, null, 50)
+        val messages = org.json.JSONArray(db.messagesJson(chatId, 50, null))
         assertEquals(6, messages.length())
 
         val all = (0 until messages.length()).map { messages.getJSONObject(it) }
