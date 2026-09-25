@@ -1,5 +1,5 @@
 name: Build TAR-JS Debug APK
-# gated dummy export pipeline v4
+# gated dummy export pipeline v5
 
 on:
   push:
@@ -51,6 +51,7 @@ jobs:
           python3 ci/patch_rclone.py
           python3 ci/patch_rclone_browser.py
           python3 ci/patch_bulk_import.py
+          python3 ci/patch_telegram_schema.py
           python3 ci/add_e2e_dummy_tests.py
 
       - name: Verify dummy Telegram export structure
