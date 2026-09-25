@@ -24,7 +24,7 @@ const messages=[
 
 async function setup(page,hasArchives=true,pin=false){
   await page.evaluateOnNewDocument((archives,chats,messages,hasArchives,pin)=>{
-    window.TARJS={
+    window.__browseCalls=[];\n    window.TARJS={
       getAppPrefs:()=>JSON.stringify({pinEnabled:pin,displayName:'Me',senderId:'user999',hasProfilePhoto:false}),
       getOwner:()=>JSON.stringify({id:'user999',name:'Me'}),
       listArchives:()=>JSON.stringify(hasArchives?archives:[]),
@@ -33,7 +33,7 @@ async function setup(page,hasArchives=true,pin=false){
       getMessageWindow:()=>JSON.stringify(messages),
       search:()=>JSON.stringify([{chatId:10,messageDbId:6,chatName:'Alice Test',sender:'Me',text:'important document',dateUnix:1788257100}]),
       verifyPin:p=>p==='1234',setPin:()=>true,disablePin:()=>true,saveIdentity:()=>{},chooseProfilePhoto:()=>{},
-      chooseFolder:()=>{},chooseRcloneConfig:()=>{},browseRclone:()=>{},importRcloneFolder:()=>{},unlockRclone:()=>{},rescan:()=>{},makeOffline:()=>{}
+      chooseFolder:()=>{},chooseRcloneConfig:()=>{},browseRclone:(remote,path)=>{window.__browseCalls.push({remote,path})},importRcloneFolder:()=>{},unlockRclone:()=>{},rescan:()=>{},makeOffline:()=>{}
     };
   },archives,chats,messages,hasArchives,pin);
 }
@@ -66,7 +66,17 @@ for(const width of widths){
   if(!sides.incoming||!sides.outgoing) throw new Error('message alignment missing '+JSON.stringify(sides));
   await p.evaluate(()=>{S.view='search';render()});await assertLayout(p,'search '+width);
   await p.evaluate(()=>{S.view='settings';render()});await assertLayout(p,'settings '+width);
-  await p.evaluate(()=>renderRcloneListing({remote:'crypt:',path:'Telegram Export',entries:[{Name:'photos',Path:'photos',IsDir:true},{Name:'stickers',Path:'stickers',IsDir:true},{Name:'result.json',Path:'result.json',IsDir:false,Size:12345}]}));await assertLayout(p,'rclone '+width);
+  const remoteCheck=await p.evaluate(()=>{
+    rcloneStart({remotes:['b2remote','b2crypt'],engineAvailable:true,hasCrypt:true});
+    const txt=document.querySelector('#main').textContent||'';
+    const rows=[...document.querySelectorAll('.row')];
+    if(!txt.includes('b2remote')||!txt.includes('b2crypt')) return {ok:false,reason:'remote names missing',txt};
+    rows[0]?.click();
+    return {ok:true,call:window.__browseCalls[0]||null};
+  });
+  if(!remoteCheck.ok||!remoteCheck.call||remoteCheck.call.remote!=='b2remote'||remoteCheck.call.path!=='') throw new Error('rclone remote UI regression '+JSON.stringify(remoteCheck));
+  await assertLayout(p,'rclone remotes '+width);
+  await p.evaluate(()=>renderRcloneListing({remote:'b2crypt',path:'Telegram Export',entries:[{Name:'photos',Path:'photos',IsDir:true},{Name:'stickers',Path:'stickers',IsDir:true},{Name:'result.json',Path:'result.json',IsDir:false,Size:12345}]}));await assertLayout(p,'rclone '+width);
   await p.evaluate(()=>editIdentity());await assertLayout(p,'identity dialog '+width);await p.evaluate(()=>closeDialog());
   await p.close();
 
