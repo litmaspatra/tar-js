@@ -115,6 +115,8 @@ jobs:
         shell: bash
         run: |
           git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git /tmp/rclone
+          cp "$GITHUB_WORKSPACE/ci/rclone_reset_android.go" /tmp/rclone/librclone/gomobile/reset_android.go
+          cp "$GITHUB_WORKSPACE/ci/rclone_reset_test.go" /tmp/rclone/librclone/gomobile/reset_android_test.go
           cd /tmp/rclone
 
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-}"
@@ -130,6 +132,8 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           export PATH="$PATH:$HOME/go/bin"
           gomobile init
+
+          go test ./librclone/gomobile -run TestRcloneResetEncryptedConfig -count=1
 
           gomobile bind \
             -androidapi 26 \
