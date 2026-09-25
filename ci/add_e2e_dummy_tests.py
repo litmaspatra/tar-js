@@ -102,6 +102,36 @@ root = Path("tarjs/app/src/test/resources/telegram_export")
   }
 }''', encoding="utf-8")
 
+
+single = Path("tarjs/app/src/test/resources/single_chat")
+single.mkdir(parents=True, exist_ok=True)
+(single / "result.json").write_text(r'''{
+  "name": "Bob Single Chat",
+  "type": "personal_chat",
+  "id": 2002,
+  "messages": [
+    {
+      "id": 11,
+      "type": "message",
+      "date": "2026-09-02T12:00:00",
+      "date_unixtime": "1788340200",
+      "from": "Bob",
+      "from_id": "user2002",
+      "text": "single chat hello",
+      "text_entities": [{"type":"plain","text":"single chat hello"}]
+    },
+    {
+      "id": 12,
+      "type": "message",
+      "date": "2026-09-02T12:01:00",
+      "date_unixtime": "1788340260",
+      "from": "Me",
+      "from_id": "user999",
+      "text": ["mixed ", {"type":"bold","text":"text"}, " array"]
+    }
+  ]
+}''', encoding="utf-8")
+
 # Add Robolectric/JUnit test dependencies.
 p = Path("tarjs/app/build.gradle.kts")
 s = p.read_text()
@@ -188,6 +218,24 @@ class TelegramImporterSmokeTest {
         assertTrue(media.contains("files/document_1.pdf"))
     }
 
+
+    @Test
+    fun singleChatExport_indexesTopLevelMessages() {
+        val id = db.createArchive("Single", "local", "file:///single")
+        val input = requireNotNull(javaClass.classLoader!!.getResourceAsStream("single_chat/result.json"))
+        val result = TelegramImporter(db).import(id, input)
+
+        assertEquals(1, result.chats)
+        assertEquals(2, result.messages)
+
+        val chats = org.json.JSONArray(db.chatsJson(id))
+        assertEquals(1, chats.length())
+        assertEquals("Bob Single Chat", chats.getJSONObject(0).getString("name"))
+
+        val search = org.json.JSONArray(db.searchJson(id, "single", 20))
+        assertTrue(search.length() >= 1)
+    }
+
     @Test
     fun fixture_hasEveryReferencedMediaFile() {
         val base = File(requireNotNull(javaClass.classLoader!!.getResource("telegram_export")).toURI())
@@ -210,6 +258,10 @@ verify.write_text(r'''import json
 from pathlib import Path
 
 root = Path("app/src/test/resources/telegram_export")
+single = Path("app/src/test/resources/single_chat")
+single_data = json.loads((single / "result.json").read_text("utf-8"))
+assert single_data["name"] == "Bob Single Chat"
+assert len(single_data["messages"]) == 2
 data = json.loads((root / "result.json").read_text("utf-8"))
 chats = data["chats"]["list"]
 assert len(chats) == 1
@@ -235,5 +287,5 @@ for rel in expected:
     p = root / rel
     assert p.is_file(), f"Missing referenced media {rel}"
 
-print(f"DUMMY_EXPORT_OK chats={len(chats)} messages={len(messages)} media={len(expected)}")
+print(f"DUMMY_EXPORT_OK chats={len(chats)} messages={len(messages)} media={len(expected)} single_messages={len(single_data['messages'])}")
 ''', encoding="utf-8")
