@@ -1,5 +1,5 @@
 name: Build TAR-JS Debug APK
-# ui-overhaul-rerun
+# ui-overhaul-v2
 # gated dummy export pipeline v5
 
 on:
@@ -57,17 +57,36 @@ jobs:
           python3 ci/patch_ui_chat.py
           cat ci/ui_override.css >> tarjs/app/src/main/assets/web/styles.css
           python3 ci/add_e2e_dummy_tests.py
+          python3 ci/patch_ui_native.py
 
-      - name: Verify frontend syntax and layout guards
+      - name: Bundle Lottie player for TGS stickers
+        shell: bash
+        run: |
+          curl -fsSL --retry 3 https://cdn.jsdelivr.net/npm/lottie-web@5.13.0/build/player/lottie.min.js -o tarjs/app/src/main/assets/web/lottie.min.js
+          test -s tarjs/app/src/main/assets/web/lottie.min.js
+
+      - name: Verify frontend syntax and shared design system
         shell: bash
         run: |
           node --check tarjs/app/src/main/assets/web/app.js
-          grep -q 'message.mine' tarjs/app/src/main/assets/web/styles.css
-          grep -q 'sticker-media' tarjs/app/src/main/assets/web/styles.css
-          grep -q 'min-width:0' tarjs/app/src/main/assets/web/styles.css
+          grep -q -- '--c-primary:' tarjs/app/src/main/assets/web/styles.css
+          grep -q -- '--s-4:' tarjs/app/src/main/assets/web/styles.css
           grep -q 'prefers-reduced-motion' tarjs/app/src/main/assets/web/styles.css
-          grep -q 'autoplay loop muted playsinline' tarjs/app/src/main/assets/web/app.js
+          grep -q 'message.out' tarjs/app/src/main/assets/web/styles.css
+          grep -q 'tgs-sticker' tarjs/app/src/main/assets/web/styles.css
+          grep -q 'lock-screen' tarjs/app/src/main/assets/web/styles.css
+          grep -q 'autoplay muted loop playsinline' tarjs/app/src/main/assets/web/app.js
           grep -q 'TARJS.getOwner' tarjs/app/src/main/assets/web/app.js
+          grep -q 'TARJS.verifyPin' tarjs/app/src/main/assets/web/app.js
+
+      - name: Screen-by-screen narrow layout test
+        shell: bash
+        run: |
+          npm install --no-save --no-package-lock puppeteer-core@24.17.0
+          (cd tarjs/app/src/main/assets/web && python3 -m http.server 8765 >/tmp/tarjs-ui-http.log 2>&1 &)
+          sleep 2
+          node ci/ui_layout_test.mjs
+
       - name: Verify dummy Telegram export structure
         working-directory: tarjs
         shell: bash
