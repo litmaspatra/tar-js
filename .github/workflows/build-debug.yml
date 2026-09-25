@@ -67,15 +67,18 @@ jobs:
         shell: bash
         run: |
           node --check tarjs/app/src/main/assets/web/app.js
-          grep -q -- '--c-primary:' tarjs/app/src/main/assets/web/styles.css
-          grep -q -- '--s-4:' tarjs/app/src/main/assets/web/styles.css
-          grep -q 'prefers-reduced-motion' tarjs/app/src/main/assets/web/styles.css
-          grep -q 'message.out' tarjs/app/src/main/assets/web/styles.css
-          grep -q 'tgs-sticker' tarjs/app/src/main/assets/web/styles.css
-          grep -q 'lock-screen' tarjs/app/src/main/assets/web/styles.css
-          grep -q 'autoplay muted loop playsinline' tarjs/app/src/main/assets/web/app.js
-          grep -q 'TARJS.getOwner' tarjs/app/src/main/assets/web/app.js
-          grep -q 'TARJS.verifyPin' tarjs/app/src/main/assets/web/app.js
+          fail=0
+          check() { if grep -q -- "$1" "$2"; then echo "PASS $1"; else echo "MISSING $1"; fail=1; fi; }
+          check '--c-primary:' tarjs/app/src/main/assets/web/styles.css
+          check '--s-4:' tarjs/app/src/main/assets/web/styles.css
+          check 'prefers-reduced-motion' tarjs/app/src/main/assets/web/styles.css
+          check 'message.out' tarjs/app/src/main/assets/web/styles.css
+          check 'tgs-sticker' tarjs/app/src/main/assets/web/styles.css
+          check 'lock-screen' tarjs/app/src/main/assets/web/styles.css
+          check 'autoplay muted loop playsinline' tarjs/app/src/main/assets/web/app.js
+          check 'TARJS.getOwner' tarjs/app/src/main/assets/web/app.js
+          check 'TARJS.verifyPin' tarjs/app/src/main/assets/web/app.js
+          exit "$fail"
 
       - name: Screen-by-screen narrow layout test
         shell: bash
