@@ -56,6 +56,7 @@ jobs:
           python3 ci/patch_owner_identity.py
           python3 ci/add_e2e_dummy_tests.py
           python3 ci/patch_ui_native.py
+          python3 ci/patch_ui_owner.py
 
       - name: Bundle Lottie player for TGS stickers
         shell: bash
