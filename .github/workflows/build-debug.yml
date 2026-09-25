@@ -59,6 +59,20 @@ jobs:
           python3 ci/patch_rclone_regression.py
           python3 ci/patch_ui_owner.py
 
+      - name: Package current TAR-JS source
+        shell: bash
+        run: |
+          cd tarjs
+          zip -qr ../TAR-JS-source.zip . -x "app/build/*" ".gradle/*" "build/*"
+
+      - name: Upload TAR-JS source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-source
+          path: TAR-JS-source.zip
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Bundle Lottie player for TGS stickers
         shell: bash
         run: |
