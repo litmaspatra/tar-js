@@ -182,6 +182,11 @@ jobs:
           p.write_text(s)
           PY
 
+      - name: Enable AndroidX for JVM tests
+        shell: bash
+        run: |
+          grep -q '^android.useAndroidX=' tarjs/gradle.properties && sed -i 's/^android.useAndroidX=.*/android.useAndroidX=true/' tarjs/gradle.properties || echo 'android.useAndroidX=true' >> tarjs/gradle.properties
+
       - name: Run TAR-JS importer/index/search unit tests
         working-directory: tarjs
         shell: bash
