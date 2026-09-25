@@ -117,6 +117,10 @@ jobs:
         shell: bash
         run: python3 ci/patch_rclone.py
 
+      - name: Patch rclone folder browser and media paths
+        shell: bash
+        run: python3 ci/patch_rclone_browser.py
+
       - name: Apply Kotlin 2.3 JVM target fix
         shell: bash
         run: |
