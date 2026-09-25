@@ -57,6 +57,16 @@ jobs:
           cat ci/ui_override.css >> tarjs/app/src/main/assets/web/styles.css
           python3 ci/add_e2e_dummy_tests.py
 
+      - name: Verify frontend syntax and layout guards
+        shell: bash
+        run: |
+          node --check tarjs/app/src/main/assets/web/app.js
+          grep -q 'message.mine' tarjs/app/src/main/assets/web/styles.css
+          grep -q 'sticker-media' tarjs/app/src/main/assets/web/styles.css
+          grep -q 'min-width:0' tarjs/app/src/main/assets/web/styles.css
+          grep -q 'prefers-reduced-motion' tarjs/app/src/main/assets/web/styles.css
+          grep -q 'autoplay loop muted playsinline' tarjs/app/src/main/assets/web/app.js
+          grep -q 'TARJS.getOwner' tarjs/app/src/main/assets/web/app.js
       - name: Verify dummy Telegram export structure
         working-directory: tarjs
         shell: bash
