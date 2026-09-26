@@ -1,0 +1,109 @@
+name: Build TAR-JS Debug APK (Unchanged Source)
+
+on:
+  push:
+    branches: [ tarjs-official-source ]
+    paths:
+      - '.github/workflows/build-tarjs-official.yml'
+      - 'bootstrap/tarjs_text_*.b64'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Reconstruct uploaded source and verify SHA-256
+        shell: bash
+        run: |
+          cat bootstrap/tarjs_text_00.b64 bootstrap/tarjs_text_01.b64 bootstrap/tarjs_text_02.b64 bootstrap/tarjs_text_03.b64 bootstrap/tarjs_text_04.b64 bootstrap/tarjs_text_05.b64 bootstrap/tarjs_text_06.b64 bootstrap/tarjs_text_07.b64 bootstrap/tarjs_text_08.b64 > /tmp/tarjs_text.b64
+          test "$(wc -c < /tmp/tarjs_text.b64)" -eq 104700
+          base64 --decode /tmp/tarjs_text.b64 > /tmp/tarjs-text.tar.xz
+          echo "492834ce3dd347cd74e4fee946f0d5b6dc0e98afea5425f7d0dc9cfe28169f5c  /tmp/tarjs-text.tar.xz" | sha256sum -c -
+          xz -t /tmp/tarjs-text.tar.xz
+          mkdir tarjs
+          tar -xJf /tmp/tarjs-text.tar.xz -C tarjs
+          test -f tarjs/settings.gradle.kts
+          test -f tarjs/app/build.gradle.kts
+          test -f tarjs/tools/verify-rclone-aar.sh
+          mkdir -p tarjs/app/libs
+          echo SOURCE_INTEGRITY_OK
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare Android SDK 36
+        shell: bash
+        run: |
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Set up Go 1.26.6
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Build rclone v1.75.1 gomobile AAR without patches
+        shell: bash
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-}"
+          if [ -z "$ANDROID_NDK_HOME" ] || [ ! -d "$ANDROID_NDK_HOME" ]; then
+            ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          fi
+          export ANDROID_NDK_HOME ANDROID_NDK="$ANDROID_NDK_HOME"
+          test -d "$ANDROID_NDK_HOME"
+          git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git /tmp/rclone
+          cd /tmp/rclone
+          go install golang.org/x/mobile/cmd/gobind@latest
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          export PATH="$PATH:$HOME/go/bin"
+          gomobile init
+          gomobile bind -androidapi 26 -target=android/arm64 -javapkg=org.rclone \
+            -ldflags "-s -X github.com/rclone/rclone/fs.Version=v1.75.1" \
+            -o "$GITHUB_WORKSPACE/tarjs/app/libs/gomobile.aar" \
+            github.com/rclone/rclone/librclone/gomobile
+          cd "$GITHUB_WORKSPACE/tarjs"
+          bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+
+      - name: Verify frontend syntax without modifying it
+        run: node --check tarjs/app/src/main/assets/web/app.js
+
+      - name: Assemble untouched debug APK
+        working-directory: tarjs
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify debug APK
+        shell: bash
+        run: |
+          APK=tarjs/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libgojni.so'
+          sha256sum "$APK"
+          ls -lh "$APK"
+          echo APK_OK
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-debug
+          path: tarjs/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
