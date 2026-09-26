@@ -1,0 +1,215 @@
+name: Bootstrap Exact TAR-JS Source
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ build-uploaded-gomobile-fixed ]
+    paths:
+      - '.github/workflows/bootstrap-exact-tarjs.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-build-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout bootstrap branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct exact clean source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat bootstrap/tarjs_v2_00.b64 \
+              bootstrap/tarjs_v2_01.b64 \
+              bootstrap/tarjs_v2_02.b64 \
+              bootstrap/tarjs_v2_03.b64 \
+              bootstrap/tarjs_v2_04.b64 \
+              bootstrap/tarjs_v2_05.b64 \
+              bootstrap/tarjs_v2_06.b64 \
+              bootstrap/tarjs_v2_07.b64 \
+              bootstrap/tarjs_v2_08.b64 > /tmp/tarjs.b64
+          test "$(wc -c < /tmp/tarjs.b64)" = "142304"
+          base64 --decode /tmp/tarjs.b64 > /tmp/tarjs.tgz
+          echo '936a7dedd4a4aa92ef83a66ac08b90a14dd076ee5db0e13a71b6a87112b39898  /tmp/tarjs.tgz' | sha256sum -c -
+          tar -tzf /tmp/tarjs.tgz >/dev/null
+          rm -rf tarjs-upload
+          mkdir tarjs-upload
+          tar -xzf /tmp/tarjs.tgz -C tarjs-upload
+          chmod -R u+rwX tarjs-upload
+          echo SOURCE_TRANSPORT_VERIFIED
+
+      - name: Resilient file readability scan
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path('tarjs-upload')
+          checked = 0
+          skipped = []
+          for path in root.rglob('*'):
+              if not path.is_file():
+                  continue
+              try:
+                  with path.open('rb') as f:
+                      f.read(1)
+                  checked += 1
+              except (PermissionError, OSError) as exc:
+                  skipped.append((str(path), str(exc)))
+                  print(f'SKIP_UNREADABLE: {path}: {exc}')
+          print(f'READABLE_FILES_CHECKED={checked}')
+          print(f'UNREADABLE_FILES_SKIPPED={len(skipped)}')
+          PY
+
+      - name: Verify original production source and dummy fixtures
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          set -euo pipefail
+          sha256sum -c ci-tests/protected-source.sha256
+          python3 ci-tests/smoke_test.py
+          node --check app/src/main/assets/web/app.js
+          echo ORIGINAL_APP_SOURCE_BYTE_IDENTICAL
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Build gomobile.aar from rclone v1.75.1
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-}"
+          if [ -z "${ANDROID_NDK_HOME}" ] || [ ! -d "${ANDROID_NDK_HOME}" ]; then
+            ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)"
+          fi
+          if [ -z "${ANDROID_NDK_HOME}" ] || [ ! -d "${ANDROID_NDK_HOME}" ]; then
+            SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+            "$SDKMANAGER" 'ndk;27.2.12479018'
+            ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          fi
+          export ANDROID_NDK_HOME ANDROID_NDK="$ANDROID_NDK_HOME"
+          bash tools/build-rclone-aar.sh
+          bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+          test -s app/libs/gomobile.aar
+          sha256sum app/libs/gomobile.aar
+          echo GOMOBILE_AAR_VERIFIED
+
+      - name: Assemble untouched TAR-JS app
+        working-directory: tarjs-upload
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify final APK contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='tarjs-upload/app/build/outputs/apk/debug/app-debug.apk'
+          test -s "$APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libgojni.so'
+          unzip -l "$APK" | grep -q 'assets/web/app.js'
+          unzip -l "$APK" | grep -q 'assets/web/styles.css'
+          unzip -l "$APK" | grep -q 'assets/web/vendor/lottie.min.js'
+          sha256sum "$APK"
+          echo APK_GOMOBILE_AND_ORIGINAL_UI_ASSETS_VERIFIED
+
+      - name: Install clean future build workflow
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          mkdir -p .github/workflows
+          cat > .github/workflows/build-debug.yml <<'YAML'
+          name: Build TAR-JS Debug APK
+          on:
+            workflow_dispatch:
+            push:
+              branches: [ main ]
+          permissions:
+            contents: read
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              timeout-minutes: 30
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-java@v4
+                  with:
+                    distribution: temurin
+                    java-version: '17'
+                - uses: gradle/actions/setup-gradle@v4
+                  with:
+                    gradle-version: '8.13'
+                - name: Verify source, tests, and gomobile AAR
+                  run: |
+                    chmod -R u+rwX .
+                    sha256sum -c ci-tests/protected-source.sha256
+                    python3 ci-tests/smoke_test.py
+                    node --check app/src/main/assets/web/app.js
+                    bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+                - name: Build untouched app
+                  run: gradle --stacktrace --no-daemon assembleDebug
+                - name: Verify APK embeds gomobile and UI assets
+                  run: |
+                    APK=app/build/outputs/apk/debug/app-debug.apk
+                    test -s "$APK"
+                    unzip -l "$APK" | grep -q 'lib/arm64-v8a/libgojni.so'
+                    unzip -l "$APK" | grep -q 'assets/web/app.js'
+                    unzip -l "$APK" | grep -q 'assets/web/styles.css'
+                    unzip -l "$APK" | grep -q 'assets/web/vendor/lottie.min.js'
+                - uses: actions/upload-artifact@v4
+                  with:
+                    name: TAR-JS-debug
+                    path: app/build/outputs/apk/debug/app-debug.apk
+                    if-no-files-found: error
+          YAML
+
+      - name: Publish verified direct project tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/tarjs-publish
+          mkdir /tmp/tarjs-publish
+          cp -a tarjs-upload/. /tmp/tarjs-publish/
+          rm -rf /tmp/tarjs-publish/app/build /tmp/tarjs-publish/.gradle
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -rf .
+          cp -a /tmp/tarjs-publish/. .
+          git add -A
+          git commit -m 'Publish verified TAR-JS source with gomobile AAR'
+          git push origin HEAD:build-uploaded-gomobile-fixed
+
+      - name: Upload verified debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-verified-debug
+          path: tarjs-upload/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
