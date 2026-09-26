@@ -22,7 +22,7 @@ jobs:
       - name: Unpack uploaded TAR-JS source
         shell: bash
         run: |
-          echo '8cadbf11799eb0fd266736662fb4b787b063c1ebad4e06988106caac5ef673aa  ci/uploaded-source.tar.xz' | sha256sum -c -
+          xz -t ci/uploaded-source.tar.xz
           mkdir tarjs-upload
           tar -xJf ci/uploaded-source.tar.xz -C tarjs-upload
           test -f tarjs-upload/settings.gradle.kts
