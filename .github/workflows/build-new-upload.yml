@@ -1,0 +1,177 @@
+name: Build New TAR-JS Upload
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tarjs-now]
+    paths:
+      - '.github/workflows/build-new-upload.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct exact new upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat current-src/part{00..09}.b64 > /tmp/src.b64
+          test "$(wc -c < /tmp/src.b64)" = "139060"
+          echo '9d27d57a83ab237a6c727f8cd0cc7ca61ea4ffac5252e0f0476c8fcdcf9a6e52  /tmp/src.b64' | sha256sum -c -
+          base64 --decode /tmp/src.b64 > /tmp/src.tgz
+          echo 'd9173bf93c4f86df60ca6f7661f507ebe298d20dbe879a49cd8bb3ba05b5a5cd  /tmp/src.tgz' | sha256sum -c -
+          tar -tzf /tmp/src.tgz >/dev/null
+          rm -rf tarjs-upload && mkdir tarjs-upload
+          tar -xzf /tmp/src.tgz -C tarjs-upload
+          chmod -R u+rwX tarjs-upload
+          echo EXACT_NEW_UPLOAD_OK
+
+      - name: Readability and required-file checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('tarjs-upload')
+          checked=0; skipped=[]
+          for p in root.rglob('*'):
+              if not p.is_file(): continue
+              try:
+                  with p.open('rb') as f: f.read(1)
+                  checked += 1
+              except (PermissionError,OSError) as e:
+                  skipped.append((str(p),str(e)))
+                  print(f'SKIP_UNREADABLE: {p}: {e}')
+          print(f'READABLE_FILES={checked} SKIPPED_UNREADABLE={len(skipped)}')
+          required=[
+            'settings.gradle.kts','build.gradle.kts','app/build.gradle.kts',
+            'app/src/main/assets/web/app.js','app/src/main/assets/web/index.html',
+            'app/src/main/assets/web/styles.css','app/src/main/assets/web/vendor/lottie.min.js',
+            'app/src/main/java/com/tarjs/archive/TelegramImporter.kt',
+            'tools/build-rclone-aar.sh','tools/verify-rclone-aar.sh','fixtures/result.json']
+          for rel in required:
+              p=root/rel
+              if not p.is_file(): raise SystemExit(f'MISSING_REQUIRED: {rel}')
+              with p.open('rb') as f: f.read(1)
+          print('REQUIRED_FILES_OK')
+          PY
+
+      - name: Dummy Telegram JSON and message smoke tests
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          original=json.loads(Path('fixtures/result.json').read_text())
+          assert original['chats']['list'], 'existing fixture has no chats'
+          dummy={"personal_information":{"user_id":42,"first_name":"Dummy","last_name":"User"},"chats":{"list":[{"name":"Dummy chat","type":"personal_chat","id":10001,"messages":[
+            {"id":1,"type":"message","date_unixtime":"1790419200","from":"Dummy User","from_id":"user42","text":"Plain text"},
+            {"id":2,"type":"message","date_unixtime":"1790419260","from":"Alice","from_id":"user99","reply_to_message_id":1,"text":[{"type":"plain","text":"Rich "},{"type":"bold","text":"text"}]},
+            {"id":3,"type":"message","date_unixtime":"1790419320","from":"Alice","photo":"photos/photo.jpg","text":"Photo"},
+            {"id":4,"type":"message","date_unixtime":"1790419380","from":"Dummy User","file":"stickers/static.webp","media_type":"sticker","mime_type":"image/webp"},
+            {"id":5,"type":"message","date_unixtime":"1790419440","from":"Alice","file":"stickers/animated.tgs","media_type":"sticker","mime_type":"application/x-tgsticker"},
+            {"id":6,"type":"message","date_unixtime":"1790419500","from":"Dummy User","file":"voice.ogg","media_type":"voice_message","mime_type":"audio/ogg","duration_seconds":7},
+            {"id":7,"type":"message","date_unixtime":"1790419560","from":"Alice","file":"video.mp4","media_type":"video_file","mime_type":"video/mp4","duration_seconds":15},
+            {"id":8,"type":"message","date_unixtime":"1790419620","from":"Alice","forwarded_from":"Forward Source","edited":"2026-09-26T08:08:00+00:00","text":"Forwarded edited"},
+            {"id":9,"type":"service","date_unixtime":"1790419740","actor":"Alice","action":"phone_call","text":"Service message"}
+          ]}]}}
+          m=dummy['chats']['list'][0]['messages']
+          assert len(m)==9
+          assert any(x.get('reply_to_message_id') for x in m)
+          assert any(x.get('photo') for x in m)
+          assert any(str(x.get('file','')).endswith('.webp') for x in m)
+          assert any(str(x.get('file','')).endswith('.tgs') for x in m)
+          assert any(str(x.get('file','')).endswith('.ogg') for x in m)
+          assert any(str(x.get('file','')).endswith('.mp4') for x in m)
+          assert any(x.get('forwarded_from') for x in m)
+          assert any(x.get('edited') for x in m)
+          assert any(x.get('type')=='service' for x in m)
+          importer=Path('app/src/main/java/com/tarjs/archive/TelegramImporter.kt').read_text()
+          ui=Path('app/src/main/assets/web/app.js').read_text()
+          for t in ['reply_to_message_id','forwarded_from','edited','duration_seconds','sticker','photo','voice','video']:
+              assert t in importer, f'importer missing {t}'
+          for t in ['renderMessages','replyTo','forwardedFrom','edited','.tgs','serviceAction','renderRcloneListing']:
+              assert t in ui, f'UI missing {t}'
+          print('DUMMY_JSON_MESSAGES_OK')
+          PY
+          node --check app/src/main/assets/web/app.js
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Build and verify gomobile AAR
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-}"
+          if [ -z "${ANDROID_NDK_HOME}" ] || [ ! -d "${ANDROID_NDK_HOME}" ]; then
+            ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)"
+          fi
+          if [ -z "${ANDROID_NDK_HOME}" ] || [ ! -d "${ANDROID_NDK_HOME}" ]; then
+            SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+            "$SDKMANAGER" 'ndk;27.2.12479018'
+            ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          fi
+          export ANDROID_NDK_HOME ANDROID_NDK="$ANDROID_NDK_HOME"
+          bash tools/build-rclone-aar.sh
+          bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+          test -s app/libs/gomobile.aar
+          ls -lh app/libs/gomobile.aar
+          echo GOMOBILE_AAR_READY
+
+      - name: Assemble untouched app
+        working-directory: tarjs-upload
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify final APK contains gomobile and original web UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=tarjs-upload/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libgojni.so'
+          unzip -l "$APK" | grep -q 'assets/web/app.js'
+          unzip -l "$APK" | grep -q 'assets/web/styles.css'
+          unzip -l "$APK" | grep -q 'assets/web/vendor/lottie.min.js'
+          sha256sum "$APK"
+          echo APK_CONTENTS_OK
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-new-upload-debug
+          path: tarjs-upload/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
