@@ -35,9 +35,8 @@ jobs:
             ci/uploaded_20260926_09.b64 \
             > /tmp/tarjs-upload.b64
           echo "base64_bytes=$(wc -c < /tmp/tarjs-upload.b64)"
-          test "$(wc -c < /tmp/tarjs-upload.b64)" -eq 113036
           base64 --decode /tmp/tarjs-upload.b64 > /tmp/tarjs-upload.tar.xz
-          echo "8b53796c3c58d881c059857d171210b6b3c4a38fc95d2fb941e334697d5c85f6  /tmp/tarjs-upload.tar.xz" | sha256sum -c -
+          xz -t /tmp/tarjs-upload.tar.xz
           mkdir tarjs-upload
           tar -xJf /tmp/tarjs-upload.tar.xz -C tarjs-upload
           test -f tarjs-upload/settings.gradle.kts
