@@ -1,0 +1,123 @@
+name: Build Uploaded TAR-JS Debug APK v2
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-uploaded-tarjs-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+
+      - name: Reconstruct exact uploaded source
+        shell: bash
+        run: |
+          cat ci/uploaded_20260926_{00..09}.b64 > /tmp/tarjs-upload.b64
+          echo "base64_bytes=$(wc -c < /tmp/tarjs-upload.b64)"
+          test "$(wc -c < /tmp/tarjs-upload.b64)" -eq 113036
+          base64 --decode /tmp/tarjs-upload.b64 > /tmp/tarjs-upload.tar.xz
+          echo "8b53796c3c58d881c059857d171210b6b3c4a38fc95d2fb941e334697d5c85f6  /tmp/tarjs-upload.tar.xz" | sha256sum -c -
+          mkdir tarjs-upload
+          tar -xJf /tmp/tarjs-upload.tar.xz -C tarjs-upload
+          test -f tarjs-upload/settings.gradle.kts
+          test -f tarjs-upload/app/build.gradle.kts
+          test -f tarjs-upload/tools/verify-rclone-aar.sh
+          test -f tarjs-upload/app/src/main/assets/web/vendor/lottie.min.js
+          echo "SOURCE_INTEGRITY_OK"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare Android SDK
+        shell: bash
+        run: |
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Set up Go 1.26.6
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Build rclone gomobile AAR
+        shell: bash
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-}"
+          if [ -z "$ANDROID_NDK_HOME" ] || [ ! -d "$ANDROID_NDK_HOME" ]; then
+            ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          fi
+          export ANDROID_NDK_HOME ANDROID_NDK="$ANDROID_NDK_HOME"
+          test -d "$ANDROID_NDK_HOME"
+          git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git /tmp/rclone
+          cd /tmp/rclone
+          go install golang.org/x/mobile/cmd/gobind@latest
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          export PATH="$PATH:$HOME/go/bin"
+          gomobile init
+          gomobile bind -androidapi 26 -target=android/arm64 -javapkg=org.rclone \
+            -ldflags "-s -X github.com/rclone/rclone/fs.Version=v1.75.1" \
+            -o "$GITHUB_WORKSPACE/tarjs-upload/app/libs/gomobile.aar" \
+            github.com/rclone/rclone/librclone/gomobile
+          cd "$GITHUB_WORKSPACE/tarjs-upload"
+          bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+
+      - name: Apply Kotlin 2.3 build compatibility
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tarjs-upload/app/build.gradle.kts')
+          s=p.read_text()
+          old='    kotlinOptions { jvmTarget = "17" }\n'
+          if old in s:
+              s=s.replace(old,'')
+              if 'kotlin {\n    compilerOptions {' not in s:
+                  s=s.replace('\n\ndependencies {','\nkotlin {\n    compilerOptions {\n        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)\n    }\n}\n\ndependencies {')
+              p.write_text(s)
+          PY
+
+      - name: Verify frontend syntax
+        run: node --check tarjs-upload/app/src/main/assets/web/app.js
+
+      - name: Assemble debug APK
+        working-directory: tarjs-upload
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify debug APK
+        shell: bash
+        run: |
+          APK=tarjs-upload/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libgojni.so'
+          sha256sum "$APK"
+          ls -lh "$APK"
+          echo "APK_OK"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-gomobile-fixed-debug
+          path: tarjs-upload/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
