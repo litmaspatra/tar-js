@@ -45,10 +45,54 @@ jobs:
           rm -rf tarjs-upload
           mkdir tarjs-upload
           unzip -q /tmp/tarjs-upload-lite.zip -d tarjs-upload
-          test -f tarjs-upload/settings.gradle.kts
-          test -f tarjs-upload/app/build.gradle.kts
-          test -f tarjs-upload/tools/verify-rclone-aar.sh
-          test -f tarjs-upload/app/src/main/assets/web/vendor/lottie.min.js
+
+      - name: Normalize extracted file permissions
+        shell: bash
+        run: |
+          cd tarjs-upload
+          chmod -R u+rwX .
+          echo "PERMISSIONS_NORMALIZED"
+
+      - name: Resilient source readability scan
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('tarjs-upload')
+          skipped = []
+          checked = 0
+
+          for path in root.rglob('*'):
+              if not path.is_file():
+                  continue
+              try:
+                  with path.open('rb') as f:
+                      f.read(1)
+                  checked += 1
+              except (PermissionError, OSError) as exc:
+                  skipped.append((path, exc))
+                  print(f"SKIP_UNREADABLE: {path}: {exc}")
+
+          print(f"READABLE_FILES_CHECKED={checked}")
+          print(f"UNREADABLE_FILES_SKIPPED={len(skipped)}")
+          PY
+
+      - name: Verify required source files
+        shell: bash
+        run: |
+          required=(
+            tarjs-upload/settings.gradle.kts
+            tarjs-upload/app/build.gradle.kts
+            tarjs-upload/tools/verify-rclone-aar.sh
+            tarjs-upload/app/src/main/assets/web/vendor/lottie.min.js
+          )
+          for f in "${required[@]}"; do
+            if [ ! -r "$f" ]; then
+              echo "REQUIRED_FILE_UNREADABLE_OR_MISSING: $f"
+              exit 1
+            fi
+          done
           echo "SOURCE_INTEGRITY_OK"
 
       - name: Set up Java 17
@@ -98,21 +142,6 @@ jobs:
             github.com/rclone/rclone/librclone/gomobile
           cd "$GITHUB_WORKSPACE/tarjs-upload"
           bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
-
-      - name: Apply Kotlin 2.3 build compatibility
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('tarjs-upload/app/build.gradle.kts')
-          s=p.read_text()
-          old='    kotlinOptions { jvmTarget = "17" }\n'
-          if old in s:
-              s=s.replace(old,'')
-              if 'kotlin {\n    compilerOptions {' not in s:
-                  s=s.replace('\n\ndependencies {','\nkotlin {\n    compilerOptions {\n        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)\n    }\n}\n\ndependencies {')
-              p.write_text(s)
-          PY
 
       - name: Verify frontend syntax
         run: node --check tarjs-upload/app/src/main/assets/web/app.js
