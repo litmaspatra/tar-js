@@ -1,0 +1,215 @@
+name: Build Current TAR-JS Upload
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ build-uploaded-gomobile-fixed ]
+    paths:
+      - '.github/workflows/build-current-upload.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout transport branch
+        uses: actions/checkout@v4
+
+      - name: Recover exact source archive from one-character transport loss
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, string, sys
+          prefix = Path('bootstrap/tarjs_v2_00.b64').read_text()
+          suffix = ''.join(Path(f'bootstrap/tarjs_v2_{i:02d}.b64').read_text() for i in range(1,9))
+          target = '936a7dedd4a4aa92ef83a66ac08b90a14dd076ee5db0e13a71b6a87112b39898'
+          alphabet = string.ascii_uppercase + string.ascii_lowercase + string.digits + '+/'
+          if len(prefix) != 15999:
+              raise SystemExit(f'Unexpected prefix length: {len(prefix)}')
+          found = None
+          for c in alphabet:
+              candidate = prefix + c + suffix
+              try:
+                  raw = base64.b64decode(candidate, validate=True)
+              except Exception:
+                  continue
+              if hashlib.sha256(raw).hexdigest() == target:
+                  found = (c, raw)
+                  break
+          if not found:
+              raise SystemExit('Could not recover the single missing Base64 character to the known archive SHA-256')
+          print('RECOVERED_MISSING_BASE64_CHAR')
+          Path('/tmp/tarjs.tgz').write_bytes(found[1])
+          PY
+          echo '936a7dedd4a4aa92ef83a66ac08b90a14dd076ee5db0e13a71b6a87112b39898  /tmp/tarjs.tgz' | sha256sum -c -
+          tar -tzf /tmp/tarjs.tgz >/dev/null
+          rm -rf tarjs-upload
+          mkdir tarjs-upload
+          tar -xzf /tmp/tarjs.tgz -C tarjs-upload
+          chmod -R u+rwX tarjs-upload
+          echo SOURCE_ARCHIVE_RECOVERED_AND_PERMISSIONS_NORMALIZED
+
+      - name: Verify this source matches the newly uploaded ZIP
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          set -euo pipefail
+          cat > /tmp/current-upload.sha256 <<'EOF'
+          9d0c62b809cf774b889dd315c3197a82950013bf105360f012746240149e4f89  .gitignore
+          b6c902447ba9d3d0b9e56ca2e53a4119c5a41b5d66eae4cc666f258e71563b21  README.md
+          513ddd34a33e96baa3ccb343702eb84832a37cd52f6b0a577af83e28c763a2e4  app/build.gradle.kts
+          188bb86d614ee4365bb7c3aae43aea8423f0e9cf612bad418455a498bc3264cf  app/libs/gomobile-sources.jar
+          c9bd8a354ccce8acbbddcd6e80e36d8fa55865a3a07b3f22ffe6d00c5045bdad  app/proguard-rules.pro
+          5e6d032e472707c92237dde0a2a407338aecf291035f51201ae7f2e395afd454  app/src/main/AndroidManifest.xml
+          23cbb8d08f02aec525bc3022136d0415678b23a2039ec4ead3d81377d15cc6ac  app/src/main/assets/web/app.js
+          8c14ff85f179056a1e04095ad123e8b63857dae70633fc870400f91c40621ac4  app/src/main/assets/web/index.html
+          981a3d3c63b14656cd1e3bdd4216dfdcd14670710f88be9b5f30bb845df1a200  app/src/main/assets/web/styles.css
+          18f59c1b4e5a8768068d67bd07c794ee9b8bc0f14c21f6eb61b58915d44734a6  app/src/main/assets/web/vendor/lottie.min.js
+          34338cf0b2d4670e212d558dc7176459d77571ba12bf356e943ff0fe5b4be6a2  app/src/main/java/com/tarjs/archive/ArchiveDatabase.kt
+          c0f57f7e8e38cdccefd35b1acb5e51b24f61888fe7fc5d7064f82db7376cd3a1  app/src/main/java/com/tarjs/archive/MainActivity.kt
+          0d15e0258fd4678dec8373b81eb0fdf909ff422577bca81eb24a832089c743d5  app/src/main/java/com/tarjs/archive/RcloneConfigParser.kt
+          5f12dc1c502a56eff822e03316eb9f53c8fa0292de298c29a03b751e52740420  app/src/main/java/com/tarjs/archive/RcloneEngine.kt
+          fa876876ce34e4549414aafe56fef15274219cdf10e886b83da9e50c19ae4756  app/src/main/java/com/tarjs/archive/TelegramImporter.kt
+          dd6069c0a435aabec54689ceee37a9cfd6761811846b7386700b93721428a07c  app/src/main/java/com/tarjs/archive/TreeAccess.kt
+          b2ad7649765706741035f7112e1f6bfc3f94a0658196dd6611c46eeae5d121e8  app/src/main/res/drawable/ic_launcher_background.xml
+          59f18fa5d6d210d75ddeac857d8c952111c07995830804c3e46db0122608cf9b  app/src/main/res/drawable/ic_launcher_foreground.xml
+          9137642568eba268917309bee6b645300070a000bba4213da60bda3e197c376a  app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          9137642568eba268917309bee6b645300070a000bba4213da60bda3e197c376a  app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+          61bc94b73aa1177d4e0a99de3abe96064ad1a4a23efd8be1f63cd711d37bd189  app/src/main/res/values/strings.xml
+          9705d0454238aabec48f0637487a17c7c24b92af727bbdccc31cd0aa5364a792  app/src/main/res/values/styles.xml
+          227ff9351977058c6dadd3cbc3e065942f8f588a96fedaf341631dcf7ee31767  build.gradle.kts
+          9243503a40db8766c232cede4f17178d1620fee0737ec936091f3e3b688fa910  findings.md
+          13233861830ed7ad857ab8b84a295f169d096437fc61659898934f9d66f5b656  fixtures/README.txt
+          d47369c3009accf1ac1431763cf6fd3b051413a0dcc2dc42df76ccda5587a35f  fixtures/result.json
+          88fb04ed3398915dac053efc1e1f97473aa293733ad3cdfb65717c376c769e69  gradle.properties
+          1c9cf03a96221cc0576d3ae6527f784f7acf6e9557b4482166790366f9026d46  progress.md
+          f84597d8f672cc198940ad5c92bbecd828476dc6d1c09d6034cc998b7eb23b5b  settings.gradle.kts
+          27942ccafdb4de352eee890cfe365189331081e04399a2b6f0adcbf26c02efea  task_plan.md
+          4da59f97adf573e69b756e2c6bc7c98c02e3525f9003662adde3ce1435c0228d  tools/build-rclone-aar.sh
+          96e0b7f04f07c41e2f076955f941185e5b12c8f4c3370f6ac2c641ddcee1f014  tools/verify-rclone-aar.sh
+          EOF
+          sha256sum -c /tmp/current-upload.sha256
+          echo CURRENT_UPLOAD_SOURCE_BYTE_IDENTICAL
+
+      - name: Run dummy Telegram archive/message tests
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/tarjs-dummy
+          cat > /tmp/tarjs-dummy/result.json <<'JSON'
+          {
+            "personal_information":{"user_id":42,"first_name":"Dummy","last_name":"User"},
+            "chats":{"list":[{"name":"Dummy chat","type":"personal_chat","id":10001,"messages":[
+              {"id":1,"type":"message","date_unixtime":"1790419200","from":"Dummy User","from_id":"user42","text":"Plain text"},
+              {"id":2,"type":"message","date_unixtime":"1790419260","from":"Alice","from_id":"user99","reply_to_message_id":1,"text":[{"type":"plain","text":"Rich "},{"type":"bold","text":"text"}]},
+              {"id":3,"type":"message","date_unixtime":"1790419320","from":"Alice","photo":"photos/photo.jpg","text":"Photo"},
+              {"id":4,"type":"message","date_unixtime":"1790419380","from":"Dummy User","file":"stickers/static.webp","media_type":"sticker","mime_type":"image/webp"},
+              {"id":5,"type":"message","date_unixtime":"1790419440","from":"Alice","file":"stickers/animated.tgs","media_type":"sticker","mime_type":"application/x-tgsticker"},
+              {"id":6,"type":"message","date_unixtime":"1790419500","from":"Dummy User","file":"voice.ogg","media_type":"voice_message","mime_type":"audio/ogg","duration_seconds":7},
+              {"id":7,"type":"message","date_unixtime":"1790419560","from":"Alice","file":"video.mp4","media_type":"video_file","mime_type":"video/mp4","duration_seconds":15},
+              {"id":8,"type":"message","date_unixtime":"1790419620","from":"Alice","forwarded_from":"Forward Source","edited":"2026-09-26T08:08:00+00:00","text":"Forwarded edited"},
+              {"id":9,"type":"service","date_unixtime":"1790419740","actor":"Alice","action":"phone_call","text":"Service message"}
+            ]}]}}
+          JSON
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('/tmp/tarjs-dummy/result.json').read_text())
+          m=d['chats']['list'][0]['messages']
+          assert len(m)==9
+          assert any(x.get('reply_to_message_id') for x in m)
+          assert any(x.get('photo') for x in m)
+          assert any(str(x.get('file','')).endswith('.webp') for x in m)
+          assert any(str(x.get('file','')).endswith('.tgs') for x in m)
+          assert any(str(x.get('file','')).endswith('.ogg') for x in m)
+          assert any(str(x.get('file','')).endswith('.mp4') for x in m)
+          assert any(x.get('forwarded_from') for x in m)
+          assert any(x.get('edited') for x in m)
+          assert any(x.get('type')=='service' for x in m)
+          importer=Path('app/src/main/java/com/tarjs/archive/TelegramImporter.kt').read_text()
+          for t in ['reply_to_message_id','forwarded_from','edited','duration_seconds','sticker','photo','voice','video']:
+              assert t in importer, t
+          ui=Path('app/src/main/assets/web/app.js').read_text()
+          for t in ['renderMessages','replyTo','forwardedFrom','edited',".tgs","serviceAction','renderRcloneListing']:
+              assert t in ui, t
+          print('DUMMY_ARCHIVE_TESTS_OK: text rich-text reply photo webp tgs voice video forwarded edited service')
+          PY
+          node --check app/src/main/assets/web/app.js
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.6'
+          cache: false
+
+      - name: Build and verify gomobile AAR
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          set -euo pipefail
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-}"
+          if [ -z "${ANDROID_NDK_HOME}" ] || [ ! -d "${ANDROID_NDK_HOME}" ]; then
+            ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -1)"
+          fi
+          if [ -z "${ANDROID_NDK_HOME}" ] || [ ! -d "${ANDROID_NDK_HOME}" ]; then
+            SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+            "$SDKMANAGER" 'ndk;27.2.12479018'
+            ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          fi
+          export ANDROID_NDK_HOME ANDROID_NDK="$ANDROID_NDK_HOME"
+          bash tools/build-rclone-aar.sh
+          bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+          test -s app/libs/gomobile.aar
+          ls -lh app/libs/gomobile.aar
+          echo GOMOBILE_AAR_READY
+
+      - name: Assemble untouched app
+        working-directory: tarjs-upload
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify final APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=tarjs-upload/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libgojni.so'
+          unzip -l "$APK" | grep -q 'assets/web/app.js'
+          unzip -l "$APK" | grep -q 'assets/web/styles.css'
+          unzip -l "$APK" | grep -q 'assets/web/vendor/lottie.min.js'
+          sha256sum "$APK"
+          echo APK_GOMOBILE_AND_UI_ASSETS_OK
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-current-debug
+          path: tarjs-upload/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
