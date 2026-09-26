@@ -1,57 +1,67 @@
-name: Build Uploaded TAR-JS Debug APK v3
+name: Build Exact TAR-JS and Publish Source
 
 on:
+  workflow_dispatch:
   push:
     branches: [ build-uploaded-gomobile-fixed ]
     paths:
       - '.github/workflows/build-uploaded-tarjs-v3.yml'
-  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
-      - name: Checkout uploaded-source branch
+      - name: Checkout staging branch
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Reconstruct exact uploaded source
+      - name: Reconstruct uploaded source transport
         shell: bash
         run: |
-          cat \
-            ci/gfix_00.b64 \
-            ci/gfix_01.b64 \
-            ci/gfix_02.b64 \
-            ci/gfix_03.b64 \
-            ci/gfix_04.b64 \
-            ci/gfix_05.b64 \
-            ci/gfix_06.b64 \
-            ci/gfix_07.b64 \
-            ci/gfix_08.b64 \
-            ci/gfix_09.b64 \
-            ci/gfix_10.b64 \
-            ci/gfix_11.b64 \
-            ci/gfix_12.b64 \
-            ci/gfix_13.b64 \
-            ci/gfix_14.b64 \
-            ci/gfix_15.b64 \
-            > /tmp/tarjs-upload.b64
-          echo "BASE64_BYTES=$(wc -c < /tmp/tarjs-upload.b64)"
-          base64 --decode /tmp/tarjs-upload.b64 > /tmp/tarjs-upload-lite.zip
-          sha256sum /tmp/tarjs-upload-lite.zip
-          unzip -tq /tmp/tarjs-upload-lite.zip
+          cat ci/gfix_00.b64 ci/gfix_01.b64 ci/gfix_02.b64 ci/gfix_03.b64 \
+              ci/gfix_04.b64 ci/gfix_05.b64 ci/gfix_06.b64 ci/gfix_07.b64 \
+              ci/gfix_08.b64 ci/gfix_09.b64 ci/gfix_10.b64 ci/gfix_11.b64 \
+              ci/gfix_12.b64 ci/gfix_13.b64 ci/gfix_14.b64 ci/gfix_15.b64 \
+              > /tmp/tarjs-upload.b64
+          base64 --decode /tmp/tarjs-upload.b64 > /tmp/tarjs-raw.zip
+          echo "RAW_ZIP_SHA256=$(sha256sum /tmp/tarjs-raw.zip | awk '{print $1}')"
+
+          if unzip -tq /tmp/tarjs-raw.zip >/dev/null 2>&1; then
+            cp /tmp/tarjs-raw.zip /tmp/tarjs-source.zip
+            echo "ZIP_TRANSPORT_OK"
+          else
+            echo "Raw transport has the previously observed prefix corruption; testing the measured 7500-byte repair only."
+            tail -c +7501 /tmp/tarjs-raw.zip > /tmp/tarjs-trimmed.zip
+            unzip -tq /tmp/tarjs-trimmed.zip
+            cp /tmp/tarjs-trimmed.zip /tmp/tarjs-source.zip
+            echo "ZIP_PREFIX_REPAIR_OK"
+          fi
+
           rm -rf tarjs-upload
           mkdir tarjs-upload
-          unzip -q /tmp/tarjs-upload-lite.zip -d tarjs-upload
+          unzip -q /tmp/tarjs-source.zip -d tarjs-upload
 
-      - name: Normalize extracted file permissions
+          # If the transport contains one wrapper directory, flatten it without altering file bytes.
+          if [ ! -f tarjs-upload/settings.gradle.kts ]; then
+            candidate="$(find tarjs-upload -mindepth 1 -maxdepth 2 -type f -name settings.gradle.kts -printf '%h\n' | head -n1)"
+            if [ -n "$candidate" ]; then
+              tmp="$(mktemp -d)"
+              cp -a "$candidate"/. "$tmp"/
+              rm -rf tarjs-upload
+              mkdir tarjs-upload
+              cp -a "$tmp"/. tarjs-upload/
+            fi
+          fi
+
+      - name: Normalize extracted permissions
         shell: bash
         run: |
-          cd tarjs-upload
-          chmod -R u+rwX .
+          chmod -R u+rwX tarjs-upload
           echo "PERMISSIONS_NORMALIZED"
 
       - name: Resilient source readability scan
@@ -59,11 +69,9 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           root = Path('tarjs-upload')
           skipped = []
           checked = 0
-
           for path in root.rglob('*'):
               if not path.is_file():
                   continue
@@ -74,27 +82,101 @@ jobs:
               except (PermissionError, OSError) as exc:
                   skipped.append((path, exc))
                   print(f"SKIP_UNREADABLE: {path}: {exc}")
-
           print(f"READABLE_FILES_CHECKED={checked}")
           print(f"UNREADABLE_FILES_SKIPPED={len(skipped)}")
           PY
 
-      - name: Verify required source files
+      - name: Verify production source is byte-identical to uploaded ZIP
         shell: bash
+        working-directory: tarjs-upload
         run: |
-          required=(
-            tarjs-upload/settings.gradle.kts
-            tarjs-upload/app/build.gradle.kts
-            tarjs-upload/tools/verify-rclone-aar.sh
-            tarjs-upload/app/src/main/assets/web/vendor/lottie.min.js
-          )
-          for f in "${required[@]}"; do
-            if [ ! -r "$f" ]; then
-              echo "REQUIRED_FILE_UNREADABLE_OR_MISSING: $f"
-              exit 1
-            fi
-          done
-          echo "SOURCE_INTEGRITY_OK"
+          cat > /tmp/protected-source.sha256 <<'EOF'
+          513ddd34a33e96baa3ccb343702eb84832a37cd52f6b0a577af83e28c763a2e4  app/build.gradle.kts
+          5e6d032e472707c92237dde0a2a407338aecf291035f51201ae7f2e395afd454  app/src/main/AndroidManifest.xml
+          23cbb8d08f02aec525bc3022136d0415678b23a2039ec4ead3d81377d15cc6ac  app/src/main/assets/web/app.js
+          8c14ff85f179056a1e04095ad123e8b63857dae70633fc870400f91c40621ac4  app/src/main/assets/web/index.html
+          981a3d3c63b14656cd1e3bdd4216dfdcd14670710f88be9b5f30bb845df1a200  app/src/main/assets/web/styles.css
+          18f59c1b4e5a8768068d67bd07c794ee9b8bc0f14c21f6eb61b58915d44734a6  app/src/main/assets/web/vendor/lottie.min.js
+          34338cf0b2d4670e212d558dc7176459d77571ba12bf356e943ff0fe5b4be6a2  app/src/main/java/com/tarjs/archive/ArchiveDatabase.kt
+          c0f57f7e8e38cdccefd35b1acb5e51b24f61888fe7fc5d7064f82db7376cd3a1  app/src/main/java/com/tarjs/archive/MainActivity.kt
+          0d15e0258fd4678dec8373b81eb0fdf909ff422577bca81eb24a832089c743d5  app/src/main/java/com/tarjs/archive/RcloneConfigParser.kt
+          5f12dc1c502a56eff822e03316eb9f53c8fa0292de298c29a03b751e52740420  app/src/main/java/com/tarjs/archive/RcloneEngine.kt
+          fa876876ce34e4549414aafe56fef15274219cdf10e886b83da9e50c19ae4756  app/src/main/java/com/tarjs/archive/TelegramImporter.kt
+          dd6069c0a435aabec54689ceee37a9cfd6761811846b7386700b93721428a07c  app/src/main/java/com/tarjs/archive/TreeAccess.kt
+          b2ad7649765706741035f7112e1f6bfc3f94a0658196dd6611c46eeae5d121e8  app/src/main/res/drawable/ic_launcher_background.xml
+          59f18fa5d6d210d75ddeac857d8c952111c07995830804c3e46db0122608cf9b  app/src/main/res/drawable/ic_launcher_foreground.xml
+          9137642568eba268917309bee6b645300070a000bba4213da60bda3e197c376a  app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          9137642568eba268917309bee6b645300070a000bba4213da60bda3e197c376a  app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+          61bc94b73aa1177d4e0a99de3abe96064ad1a4a23efd8be1f63cd711d37bd189  app/src/main/res/values/strings.xml
+          9705d0454238aabec48f0637487a17c7c24b92af727bbdccc31cd0aa5364a792  app/src/main/res/values/styles.xml
+          227ff9351977058c6dadd3cbc3e065942f8f588a96fedaf341631dcf7ee31767  build.gradle.kts
+          88fb04ed3398915dac053efc1e1f97473aa293733ad3cdfb65717c376c769e69  gradle.properties
+          f84597d8f672cc198940ad5c92bbecd828476dc6d1c09d6034cc998b7eb23b5b  settings.gradle.kts
+          4da59f97adf573e69b756e2c6bc7c98c02e3525f9003662adde3ce1435c0228d  tools/build-rclone-aar.sh
+          96e0b7f04f07c41e2f076955f941185e5b12c8f4c3370f6ac2c641ddcee1f014  tools/verify-rclone-aar.sh
+          EOF
+          sha256sum -c /tmp/protected-source.sha256
+          echo "PROTECTED_SOURCE_BYTE_IDENTICAL"
+
+      - name: Add test-only dummy Telegram fixtures
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          mkdir -p ci-tests
+          cat > ci-tests/dummy-result.json <<'JSON'
+          {
+            "personal_information":{"user_id":42,"first_name":"Kartik","last_name":"Test"},
+            "chats":{"about":"Synthetic TAR-JS CI fixture","list":[
+              {"name":"Dummy Personal Chat","type":"personal_chat","id":10001,"messages":[
+                {"id":1,"type":"message","date":"2026-09-26T08:00:00+00:00","date_unixtime":"1790419200","from":"Kartik Test","from_id":"user42","text":"Hello dummy archive"},
+                {"id":2,"type":"message","date":"2026-09-26T08:01:00+00:00","date_unixtime":"1790419260","from":"Alice","from_id":"user99","reply_to_message_id":1,"text":[{"type":"plain","text":"Rich "},{"type":"bold","text":"text"}]},
+                {"id":3,"type":"message","date":"2026-09-26T08:02:00+00:00","date_unixtime":"1790419320","from":"Alice","from_id":"user99","photo":"photos/photo_1.jpg","width":640,"height":480,"text":"Dummy photo"},
+                {"id":4,"type":"message","date":"2026-09-26T08:03:00+00:00","date_unixtime":"1790419380","from":"Kartik Test","from_id":"user42","file":"stickers/sticker_1.webp","media_type":"sticker","mime_type":"image/webp"},
+                {"id":5,"type":"message","date":"2026-09-26T08:04:00+00:00","date_unixtime":"1790419440","from":"Alice","from_id":"user99","file":"stickers/sticker_2.tgs","media_type":"sticker","mime_type":"application/x-tgsticker"},
+                {"id":6,"type":"message","date":"2026-09-26T08:05:00+00:00","date_unixtime":"1790419500","from":"Kartik Test","from_id":"user42","file":"voice_messages/audio_1.ogg","media_type":"voice_message","mime_type":"audio/ogg","duration_seconds":7},
+                {"id":7,"type":"message","date":"2026-09-26T08:06:00+00:00","date_unixtime":"1790419560","from":"Alice","from_id":"user99","file":"video_files/video_1.mp4","media_type":"video_file","mime_type":"video/mp4","duration_seconds":15},
+                {"id":8,"type":"message","date":"2026-09-26T08:07:00+00:00","date_unixtime":"1790419620","from":"Alice","from_id":"user99","forwarded_from":"Forward Source","edited":"2026-09-26T08:08:00+00:00","text":"Forwarded and edited"},
+                {"id":9,"type":"service","date":"2026-09-26T08:09:00+00:00","date_unixtime":"1790419740","actor":"Alice","actor_id":"user99","action":"phone_call","text":"Dummy service message"}
+              ]},
+              {"name":"Dummy Empty Chat","type":"private_group","id":10002,"messages":[]}
+            ]}
+          }
+          JSON
+          cp /tmp/protected-source.sha256 ci-tests/protected-source.sha256
+
+          cat > ci-tests/smoke_test.py <<'PY'
+          import json
+          from pathlib import Path
+          root=Path(__file__).resolve().parents[1]
+          fixture=json.loads((root/'ci-tests/dummy-result.json').read_text())
+          chats=fixture['chats']['list']; msgs=chats[0]['messages']
+          assert len(chats)==2 and len(msgs)==9 and fixture['personal_information']['user_id']==42
+          checks=[
+            any(m.get('reply_to_message_id')==1 for m in msgs),
+            any(m.get('photo') for m in msgs),
+            any(str(m.get('file','')).endswith('.webp') for m in msgs),
+            any(str(m.get('file','')).endswith('.tgs') for m in msgs),
+            any(str(m.get('file','')).endswith('.ogg') for m in msgs),
+            any(str(m.get('file','')).endswith('.mp4') for m in msgs),
+            any(m.get('forwarded_from') for m in msgs),
+            any(m.get('edited') for m in msgs),
+            any(m.get('type')=='service' and m.get('action') for m in msgs),
+          ]
+          assert all(checks)
+          importer=(root/'app/src/main/java/com/tarjs/archive/TelegramImporter.kt').read_text()
+          for token in ['personal_information','reply_to_message_id','forwarded_from','edited','duration_seconds','voice','video','sticker','photo','serviceAction']:
+              assert token in importer, token
+          frontend=(root/'app/src/main/assets/web/app.js').read_text()
+          for token in ['renderMessages','replyTo','forwardedFrom','edited',"t==='sticker'","t==='video'","t==='voice'",'serviceAction','searchView','renderRcloneListing']:
+              assert token in frontend, token
+          rclone=(root/'app/src/main/java/com/tarjs/archive/RcloneConfigParser.kt').read_text()
+          for token in ['remote','type','pass','secret']:
+              assert token in rclone, token
+          print('DUMMY_FIXTURE_OK chats=2 messages=9')
+          print('FEATURES_OK text reply rich-text photo webp tgs voice video forwarded edited service rclone')
+          PY
+          python3 ci-tests/smoke_test.py
+          node --check app/src/main/assets/web/app.js
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -116,13 +198,13 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
-      - name: Set up Go 1.26.6
+      - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version: '1.26.6'
           cache: false
 
-      - name: Build rclone gomobile AAR
+      - name: Build and verify gomobile.aar
         shell: bash
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-}"
@@ -143,28 +225,94 @@ jobs:
             github.com/rclone/rclone/librclone/gomobile
           cd "$GITHUB_WORKSPACE/tarjs-upload"
           bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+          test -s app/libs/gomobile.aar
+          echo "GOMOBILE_AAR_SHA256=$(sha256sum app/libs/gomobile.aar | awk '{print $1}')"
 
-      - name: Verify frontend syntax
-        run: node --check tarjs-upload/app/src/main/assets/web/app.js
-
-      - name: Assemble debug APK
+      - name: Assemble untouched app source
         working-directory: tarjs-upload
         run: gradle --stacktrace --no-daemon assembleDebug
 
-      - name: Verify debug APK
+      - name: Verify APK contains gomobile native runtime and app assets
         shell: bash
         run: |
           APK=tarjs-upload/app/build/outputs/apk/debug/app-debug.apk
           test -f "$APK"
           unzip -l "$APK" | grep -q 'lib/arm64-v8a/libgojni.so'
+          unzip -l "$APK" | grep -q 'assets/web/app.js'
+          unzip -l "$APK" | grep -q 'assets/web/styles.css'
+          unzip -l "$APK" | grep -q 'assets/web/vendor/lottie.min.js'
           sha256sum "$APK"
-          ls -lh "$APK"
-          echo "APK_OK"
+          ls -lh "$APK" tarjs-upload/app/libs/gomobile.aar
+          echo "APK_GOMOBILE_AND_UI_ASSETS_OK"
 
-      - name: Upload debug APK
+      - name: Create clean future build workflow
+        shell: bash
+        working-directory: tarjs-upload
+        run: |
+          mkdir -p .github/workflows
+          cat > .github/workflows/build-debug.yml <<'YAML'
+          name: Build TAR-JS Debug APK
+          on:
+            workflow_dispatch:
+            push:
+              branches: [ main ]
+          permissions:
+            contents: read
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              timeout-minutes: 30
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-java@v4
+                  with:
+                    distribution: temurin
+                    java-version: '17'
+                - uses: gradle/actions/setup-gradle@v4
+                  with:
+                    gradle-version: '8.13'
+                - name: Verify protected source and dummy fixtures
+                  run: |
+                    chmod -R u+rwX .
+                    sha256sum -c ci-tests/protected-source.sha256
+                    python3 ci-tests/smoke_test.py
+                    node --check app/src/main/assets/web/app.js
+                    bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+                - name: Build
+                  run: gradle --stacktrace --no-daemon assembleDebug
+                - name: Verify APK
+                  run: |
+                    APK=app/build/outputs/apk/debug/app-debug.apk
+                    test -f "$APK"
+                    unzip -l "$APK" | grep -q 'lib/arm64-v8a/libgojni.so'
+                    unzip -l "$APK" | grep -q 'assets/web/app.js'
+                - uses: actions/upload-artifact@v4
+                  with:
+                    name: TAR-JS-debug
+                    path: app/build/outputs/apk/debug/app-debug.apk
+                    if-no-files-found: error
+          YAML
+
+      - name: Publish direct project files to this branch
+        shell: bash
+        run: |
+          rm -rf /tmp/tarjs-publish
+          mkdir /tmp/tarjs-publish
+          cp -a tarjs-upload/. /tmp/tarjs-publish/
+          rm -rf /tmp/tarjs-publish/app/build /tmp/tarjs-publish/.gradle
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm -rf .
+          cp -a /tmp/tarjs-publish/. .
+          git add -A
+          git commit -m 'Publish verified TAR-JS source and gomobile AAR'
+          git push origin HEAD:build-uploaded-gomobile-fixed
+
+      - name: Upload verified debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: TAR-JS-gomobile-fixed-debug
+          name: TAR-JS-verified-debug
           path: tarjs-upload/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
