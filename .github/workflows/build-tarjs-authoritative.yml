@@ -1,0 +1,200 @@
+name: Build authoritative TAR-JS debug APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-tarjs-authoritative.yml'
+      - 'ci/tarjs_authoritative_20260927*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out transport repository
+        uses: actions/checkout@v4
+
+      - name: Reconstruct and verify exact uploaded source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            ci/tarjs_authoritative_20260927_00.b64 \
+            ci/tarjs_authoritative_20260927_01.b64 \
+            ci/tarjs_authoritative_20260927_02.b64 \
+            ci/tarjs_authoritative_20260927_03.b64 \
+            ci/tarjs_authoritative_20260927_04.b64 \
+            ci/tarjs_authoritative_20260927_05.b64 \
+            > /tmp/tarjs-authoritative.zip.b64
+          test "$(wc -c < /tmp/tarjs-authoritative.zip.b64)" -eq 33303364
+          base64 --decode /tmp/tarjs-authoritative.zip.b64 > /tmp/TAR-JS-source-gomobile-fixed.zip
+          echo "ee9bf544762357f7e152e0c25a4539627b6967d336c1a40f2d322724632f2dca  /tmp/TAR-JS-source-gomobile-fixed.zip" | sha256sum -c -
+          unzip -tq /tmp/TAR-JS-source-gomobile-fixed.zip
+          mkdir -p source
+          unzip -q /tmp/TAR-JS-source-gomobile-fixed.zip -d source
+          chmod -R u+rwX source
+          cd source
+          sha256sum -c "$GITHUB_WORKSPACE/ci/tarjs_authoritative_20260927.sha256"
+          echo "ARCHIVE_AND_PER_FILE_HASHES_OK"
+
+      - name: Scan source readability after permission normalization
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("source/TAR-JS")
+          skipped = []
+          for path in sorted(root.rglob("*")):
+              if not path.is_file():
+                  continue
+              try:
+                  with path.open("rb") as stream:
+                      stream.read(1)
+              except OSError as error:
+                  skipped.append(path)
+                  print(f"SKIP_UNREADABLE: {path}: {error}")
+
+          required = [
+              root / "settings.gradle.kts",
+              root / "build.gradle.kts",
+              root / "app/build.gradle.kts",
+              root / "app/src/main/AndroidManifest.xml",
+              root / "app/libs/gomobile.aar",
+              root / "fixtures/result.json",
+          ]
+          failures = [path for path in required if not path.is_file() or path in skipped]
+          if failures:
+              raise SystemExit("Unreadable required build files: " + ", ".join(map(str, failures)))
+          print(f"READABILITY_SCAN_OK skipped={len(skipped)}")
+          PY
+
+      - name: Smoke-test dummy Telegram JSON and messages
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          supplied_path = Path("source/TAR-JS/fixtures/result.json")
+          supplied = json.loads(supplied_path.read_text(encoding="utf-8"))
+          chats = supplied.get("chats", {}).get("list", [])
+          assert chats, "supplied fixture has no chats"
+          messages = chats[0].get("messages", [])
+          assert len(messages) >= 3, "supplied fixture has fewer than three messages"
+          assert any(message.get("reply_to_message_id") for message in messages), "reply smoke case missing"
+          assert any(message.get("photo") for message in messages), "photo smoke case missing"
+          assert any(message.get("media_type") == "sticker" for message in messages), "sticker smoke case missing"
+
+          generated = {
+              "about": "CI-only synthetic Telegram export",
+              "chats": {
+                  "list": [{
+                      "name": "Dummy Messages",
+                      "type": "personal_chat",
+                      "id": 424242,
+                      "messages": [
+                          {
+                              "id": 1,
+                              "type": "message",
+                              "date": "2026-09-27T00:00:00+00:00",
+                              "date_unixtime": "1790467200",
+                              "from": "Dummy Alice",
+                              "from_id": "user100",
+                              "text": "plain dummy message"
+                          },
+                          {
+                              "id": 2,
+                              "type": "message",
+                              "date": "2026-09-27T00:01:00+00:00",
+                              "date_unixtime": "1790467260",
+                              "from": "Dummy Bob",
+                              "from_id": "user200",
+                              "reply_to_message_id": 1,
+                              "text": ["rich ", {"type": "bold", "text": "dummy"}, " reply"]
+                          }
+                      ]
+                  }]
+              }
+          }
+          generated_path = Path("/tmp/tarjs-dummy-result.json")
+          generated_path.write_text(json.dumps(generated), encoding="utf-8")
+          round_trip = json.loads(generated_path.read_text(encoding="utf-8"))
+          dummy_messages = round_trip["chats"]["list"][0]["messages"]
+          assert [message["id"] for message in dummy_messages] == [1, 2]
+          assert dummy_messages[1]["reply_to_message_id"] == 1
+          assert isinstance(dummy_messages[0]["text"], str)
+          assert isinstance(dummy_messages[1]["text"], list)
+          print("DUMMY_TELEGRAM_JSON_MESSAGES_OK")
+          PY
+
+      - name: Verify uploaded gomobile AAR before Gradle
+        shell: bash
+        working-directory: source/TAR-JS
+        run: |
+          set -euo pipefail
+          bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+          sha256sum app/libs/gomobile.aar
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      - name: Verify frontend syntax
+        shell: bash
+        run: node --check source/TAR-JS/app/src/main/assets/web/app.js
+
+      - name: Compile and run JVM tests without source changes
+        shell: bash
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon testDebugUnitTest
+
+      - name: Build debug APK without source changes
+        shell: bash
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify uploaded gomobile library is in final APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
+          AAR=source/TAR-JS/app/libs/gomobile.aar
+          test -s "$APK"
+          unzip -Z1 "$APK" | grep -qx 'lib/arm64-v8a/libgojni.so'
+          unzip -p "$AAR" jni/arm64-v8a/libgojni.so | sha256sum > /tmp/aar-native.sha256
+          unzip -p "$APK" lib/arm64-v8a/libgojni.so | sha256sum > /tmp/apk-native.sha256
+          cmp /tmp/aar-native.sha256 /tmp/apk-native.sha256
+          sha256sum "$APK"
+          echo "FINAL_APK_GOMOBILE_VERIFIED"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-authoritative-debug
+          path: source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
