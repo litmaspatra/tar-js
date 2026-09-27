@@ -157,13 +157,13 @@ jobs:
           marker = "\n\ndependencies {"
           replacement = '''
 
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-    }
-}
+          kotlin {
+              compilerOptions {
+                  jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+              }
+          }
 
-dependencies {'''
+          dependencies {'''
           if marker not in source:
               raise SystemExit("Expected dependencies block marker was not found")
           path.write_text(source.replace(marker, replacement, 1), encoding="utf-8")
