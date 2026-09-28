@@ -1,4 +1,4 @@
-name: Build TAR-JS EOF Fix v2
+name: Build TAR-JS Rclone Architecture Fix
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
       - '.github/workflows/build-tarjs-eof-fix-v2.yml'
       - 'ci/apply_tarjs_eof_fix.py'
       - 'ci/apply_kotlin23_compat.py'
+      - 'ci/rclone_architecture_harness.go'
   workflow_dispatch:
 
 permissions:
@@ -15,7 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -39,16 +40,45 @@ jobs:
           python3 ci/apply_tarjs_eof_fix.py
           python3 ci/apply_kotlin23_compat.py
 
-      - name: Validate patched source and dummy fixture
+      - name: Validate patched source and Telegram dummy fixture
         shell: bash
         working-directory: source/TAR-JS
         run: |
           set -euo pipefail
-          python3 -c "import json; d=json.load(open('fixtures/result.json')); assert d.get('chats',{}).get('list'); print('DUMMY_JSON_OK')"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d = json.loads(Path('fixtures/result.json').read_text(encoding='utf-8'))
+          chats = d.get('chats', {}).get('list', [])
+          assert chats, 'fixture has no chats'
+          messages = chats[0].get('messages', [])
+          assert messages, 'fixture has no messages'
+          assert any(m.get('reply_to_message_id') for m in messages), 'reply fixture missing'
+          assert any(m.get('photo') for m in messages), 'photo fixture missing'
+          assert any(m.get('media_type') == 'sticker' for m in messages), 'sticker fixture missing'
+          print('TELEGRAM_DUMMY_FIXTURE_OK')
+          PY
           node --check app/src/main/assets/web/app.js
           bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
           grep -q 'AskPassword", false' app/src/main/java/com/tarjs/archive/RcloneEngine.kt
-          grep -q 'if (!encryptedConfig)' app/src/main/java/com/tarjs/archive/MainActivity.kt
+          grep -q 'rpcChecked("config/listremotes", JSONObject())' app/src/main/java/com/tarjs/archive/RcloneEngine.kt
+          grep -q 'RcloneConfigParser.isEncrypted' app/src/main/java/com/tarjs/archive/MainActivity.kt
+          grep -q 'rcloneConfigNeedsPassword' app/src/main/java/com/tarjs/archive/MainActivity.kt
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - name: Test actual rclone v1.75.1 encrypted-config architecture with dummies
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/rclone-tarjs-test
+          git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git /tmp/rclone-tarjs-test
+          cp ci/rclone_architecture_harness.go /tmp/rclone-tarjs-test/tarjs_architecture_harness.go
+          cd /tmp/rclone-tarjs-test
+          go run ./tarjs_architecture_harness.go
 
       - uses: actions/setup-java@v4
         with:
@@ -68,7 +98,7 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
 
-      - name: Run JVM tests
+      - name: Run JVM regression tests
         working-directory: source/TAR-JS
         run: gradle --stacktrace --no-daemon testDebugUnitTest
 
@@ -76,7 +106,7 @@ jobs:
         working-directory: source/TAR-JS
         run: gradle --stacktrace --no-daemon assembleDebug
 
-      - name: Verify APK gomobile runtime
+      - name: Verify APK embeds the exact gomobile native runtime
         shell: bash
         run: |
           set -euo pipefail
@@ -91,7 +121,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TAR-JS-eof-fixed-debug
+          name: TAR-JS-rclone-architecture-fixed-debug
           path: source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
