@@ -35,7 +35,6 @@ jobs:
           python3 ci/patch_single_chat_and_chat_photo.py
           python3 ci/patch_robolectric_importer_qa.py
           python3 ci/patch_background_indexing.py
-          python3 ci/apply_framework_notification_fix.py
           python3 ci/apply_kotlin23_compat.py
       - name: Export text source
         uses: actions/upload-artifact@v4
