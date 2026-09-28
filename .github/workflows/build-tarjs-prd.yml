@@ -9,6 +9,7 @@ on:
       - 'ci/patch_single_chat_and_chat_photo.py'
       - 'ci/patch_robolectric_importer_qa.py'
       - 'ci/patch_background_indexing.py'
+      - 'ci/fix_background_notification_builder.py'
       - 'ci/tarjs_ui_harness.js'
       - 'ci/rclone_architecture_harness.go'
       - 'ci/apply_kotlin23_compat.py'
@@ -50,6 +51,7 @@ jobs:
           python3 ci/patch_single_chat_and_chat_photo.py
           python3 ci/patch_robolectric_importer_qa.py
           python3 ci/patch_background_indexing.py
+          python3 ci/fix_background_notification_builder.py
           python3 ci/apply_kotlin23_compat.py
 
       - name: Architecture contract audit
@@ -85,8 +87,9 @@ jobs:
           assert eng.index('config/unlock') < eng.index('config/setpath')
           for token in ['rootTelegramChatId','rootMessageCount','"messages" ->','No Telegram chats were found','countMessages(','countProgress']:
             assert token in imp, token
-          for token in ['Foreground','copyFileToLocal','countMessages','START_REDELIVER_INTENT','sourceKey','TAR-JS indexing complete']:
+          for token in ['Notification.Builder','copyFileToLocal','countMessages','START_REDELIVER_INTENT','sourceKey','TAR-JS indexing complete']:
             assert token in svc, token
+          assert 'NotificationCompat' not in svc
           for token in ['Swap sides','swapSides()','Remember me','Use this folder','Telegram archive detected','Chat appearance','Change chat photo','Chat photo','Indexing status','TARJSNativeBack','indexStateCard']:
             assert token in js, token
           for token in ['index-card','overflow-sheet']:
