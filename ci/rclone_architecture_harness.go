@@ -70,10 +70,10 @@ func probe(configPath, remoteRoot string) {
     seenDummy := false
     seenCrypt := false
     for _, item := range names {
-        switch fmt.Sprint(item) {
-        case "dummy:":
+        switch strings.TrimSuffix(fmt.Sprint(item), ":") {
+        case "dummy":
             seenDummy = true
-        case "cryptdummy:":
+        case "cryptdummy":
             seenCrypt = true
         }
     }
