@@ -1,0 +1,147 @@
+name: Build TAR-JS PRD Full QA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-tarjs-prd.yml'
+      - 'ci/tarjs_prd_v1.patch.gz.b64'
+      - 'ci/tarjs_ui_harness.js'
+      - 'ci/rclone_architecture_harness.go'
+      - 'ci/apply_kotlin23_compat.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qa-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct authoritative source exactly
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ci/tarjs_authoritative_20260927_00.b64 ci/tarjs_authoritative_20260927_01.b64 ci/tarjs_authoritative_20260927_02.b64 ci/tarjs_authoritative_20260927_03.b64 ci/tarjs_authoritative_20260927_04.b64 ci/tarjs_authoritative_20260927_05.b64 > /tmp/tarjs.zip.b64
+          test "$(wc -c < /tmp/tarjs.zip.b64)" -eq 33303364
+          base64 --decode /tmp/tarjs.zip.b64 > /tmp/TAR-JS-source-gomobile-fixed.zip
+          echo 'ee9bf544762357f7e152e0c25a4539627b6967d336c1a40f2d322724632f2dca  /tmp/TAR-JS-source-gomobile-fixed.zip' | sha256sum -c -
+          unzip -tq /tmp/TAR-JS-source-gomobile-fixed.zip
+          mkdir source
+          unzip -q /tmp/TAR-JS-source-gomobile-fixed.zip -d source
+          chmod -R u+rwX source
+          cd source
+          sha256sum -c "$GITHUB_WORKSPACE/ci/tarjs_authoritative_20260927.sha256"
+
+      - name: Apply PRD implementation
+        shell: bash
+        working-directory: source/TAR-JS
+        run: |
+          set -euo pipefail
+          base64 --decode "$GITHUB_WORKSPACE/ci/tarjs_prd_v1.patch.gz.b64" | gunzip > /tmp/tarjs_prd_v1.patch
+          patch -p2 < /tmp/tarjs_prd_v1.patch
+          cd "$GITHUB_WORKSPACE"
+          python3 ci/apply_kotlin23_compat.py
+
+      - name: Architecture contract audit
+        shell: bash
+        working-directory: source/TAR-JS
+        run: |
+          set -euo pipefail
+          node --check app/src/main/assets/web/app.js
+          bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+          python3 - <<'PY'
+          from pathlib import Path
+          main=Path('app/src/main/java/com/tarjs/archive/MainActivity.kt').read_text()
+          eng=Path('app/src/main/java/com/tarjs/archive/RcloneEngine.kt').read_text()
+          sec=Path('app/src/main/java/com/tarjs/archive/SecureRclonePassword.kt').read_text()
+          js=Path('app/src/main/assets/web/app.js').read_text()
+          required_main=[
+            'RcloneConfigParser.isEncrypted', 'secureRclone.load()', 'secureRclone.save(password)',
+            'secureRclone.clear()', 'initializeRcloneForStartup()', 'REQ_OWNER_AVATAR',
+            'importRcloneFolder(remote: String, path: String)'
+          ]
+          for token in required_main: assert token in main, token
+          assert 'TARJS.rescan' not in js[:js.find('function archiveSettings')], 'archive must not rescan on startup'
+          for token in ['AndroidKeyStore','AES/GCM/NoPadding','KeyGenParameterSpec']:
+            assert token in sec, token
+          for token in ['AskPassword", false','config/unlock','config/setpath','config/listremotes']:
+            assert token in eng, token
+          assert eng.index('config/unlock') < eng.index('config/setpath')
+          for token in ['Swap sides','swapSides()','Remember me','Use this folder','Telegram archive detected','ownerProfile']:
+            assert token in js, token
+          print('ARCHITECTURE_CONTRACT_OK')
+          PY
+
+      - name: Independent UI navigation and interaction harness
+        shell: bash
+        run: node ci/tarjs_ui_harness.js source/TAR-JS/app/src/main/assets/web/app.js
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - name: Real rclone encrypted-config and remote architecture test
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/rclone-tarjs-test
+          git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git /tmp/rclone-tarjs-test
+          cp ci/rclone_architecture_harness.go /tmp/rclone-tarjs-test/tarjs_architecture_harness.go
+          cd /tmp/rclone-tarjs-test
+          go run ./tarjs_architecture_harness.go
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
+
+      - name: JVM regression tests
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon testDebugUnitTest
+
+      - name: Build debug APK
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify final APK contents and exact gomobile runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
+          AAR=source/TAR-JS/app/libs/gomobile.aar
+          test -s "$APK"
+          unzip -Z1 "$APK" | grep -qx 'lib/arm64-v8a/libgojni.so'
+          unzip -Z1 "$APK" | grep -qx 'assets/web/app.js'
+          unzip -Z1 "$APK" | grep -qx 'assets/web/styles.css'
+          unzip -p "$AAR" jni/arm64-v8a/libgojni.so | sha256sum > /tmp/aar.sha
+          unzip -p "$APK" lib/arm64-v8a/libgojni.so | sha256sum > /tmp/apk.sha
+          cmp /tmp/aar.sha /tmp/apk.sha
+          unzip -p "$APK" assets/web/app.js | grep -q 'Swap sides'
+          unzip -p "$APK" assets/web/app.js | grep -q 'Use this folder'
+          unzip -p "$APK" assets/web/app.js | grep -q 'Remember me'
+          sha256sum "$APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-PRD-full-QA-debug
+          path: source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
