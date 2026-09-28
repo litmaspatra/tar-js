@@ -1,0 +1,173 @@
+name: Build TAR-JS Native Material 3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-tarjs-native-material3.yml'
+      - 'ci/native_material3_v2_*.b64'
+      - 'ci/tarjs_prd_v1.patch.gz.b64'
+      - 'ci/patch_single_chat_and_chat_photo.py'
+      - 'ci/patch_robolectric_importer_qa.py'
+      - 'ci/patch_background_indexing.py'
+      - 'ci/rclone_architecture_harness.go'
+      - 'ci/apply_kotlin23_compat.py'
+
+permissions:
+  contents: read
+
+jobs:
+  qa-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct authoritative TAR-JS source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ci/tarjs_authoritative_20260927_00.b64 ci/tarjs_authoritative_20260927_01.b64 ci/tarjs_authoritative_20260927_02.b64 ci/tarjs_authoritative_20260927_03.b64 ci/tarjs_authoritative_20260927_04.b64 ci/tarjs_authoritative_20260927_05.b64 > /tmp/tarjs.zip.b64
+          test "$(wc -c < /tmp/tarjs.zip.b64)" -eq 33303364
+          base64 --decode /tmp/tarjs.zip.b64 > /tmp/TAR-JS-source.zip
+          echo 'ee9bf544762357f7e152e0c25a4539627b6967d336c1a40f2d322724632f2dca  /tmp/TAR-JS-source.zip' | sha256sum -c -
+          unzip -tq /tmp/TAR-JS-source.zip
+          mkdir source
+          unzip -q /tmp/TAR-JS-source.zip -d source
+          chmod -R u+rwX source
+
+      - name: Apply proven backend fixes
+        shell: bash
+        working-directory: source/TAR-JS
+        run: |
+          set -euo pipefail
+          base64 --decode "$GITHUB_WORKSPACE/ci/tarjs_prd_v1.patch.gz.b64" | gunzip > /tmp/tarjs_prd_v1.patch
+          patch -p2 < /tmp/tarjs_prd_v1.patch
+          cd "$GITHUB_WORKSPACE"
+          python3 ci/patch_single_chat_and_chat_photo.py
+          python3 ci/patch_robolectric_importer_qa.py
+          python3 ci/patch_background_indexing.py
+          python3 ci/apply_kotlin23_compat.py
+
+      - name: Apply native Kotlin Material 3 overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ci/native_material3_v2_00.b64 ci/native_material3_v2_01.b64 ci/native_material3_v2_02.b64 ci/native_material3_v2_03.b64 > /tmp/native-v2.b64
+          base64 --decode /tmp/native-v2.b64 > /tmp/native-v2.tar.gz
+          echo 'bd3a6cf2e74dc321e8b6fe19334b63d7392b4ee85c241efded6367767803476f  /tmp/native-v2.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/native-v2.tar.gz -C source/TAR-JS
+          chmod -R u+rwX source/TAR-JS
+
+      - name: Native architecture contract audit
+        shell: bash
+        working-directory: source/TAR-JS
+        run: |
+          set -euo pipefail
+          bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path('.')
+          main=(root/'app/src/main/java/com/tarjs/archive/MainActivity.kt').read_text()
+          ui=(root/'app/src/main/java/com/tarjs/archive/NativeUi.kt').read_text()
+          media=(root/'app/src/main/java/com/tarjs/archive/MediaComponents.kt').read_text()
+          db=(root/'app/src/main/java/com/tarjs/archive/ArchiveDatabase.kt').read_text()
+          imp=(root/'app/src/main/java/com/tarjs/archive/TelegramImporter.kt').read_text()
+          svc=(root/'app/src/main/java/com/tarjs/archive/IndexingService.kt').read_text()
+          tree=(root/'app/src/main/java/com/tarjs/archive/TreeAccess.kt').read_text()
+          gradle=(root/'app/build.gradle.kts').read_text()
+          props=(root/'gradle.properties').read_text()
+          models=(root/'app/src/main/java/com/tarjs/archive/Models.kt').read_text()
+          assert 'ComponentActivity' in main and 'setContent' in main
+          assert 'WebView' not in main, 'UI must be native, not WebView'
+          for t in ['MaterialTheme','CenterAlignedTopAppBar','WindowInsets.safeDrawing','DropdownMenu','ChatAvatar','AvatarAdjustDialog']:
+              assert t in ui, t
+          for t in ['GZIPInputStream','LottieAnimation','VideoView','168.dp','ContentScale.Fit']:
+              assert t in media, t
+          for t in ['custom_avatar_zoom','custom_avatar_offset_x','custom_avatar_offset_y','beginBulkImport','bulkCheckpoint','endBulkImport']:
+              assert t in db, t
+          assert 'db.beginBulkImport()' in imp and 'countProgress' in imp
+          assert 'FastTelegramMessageCounter.count' in svc
+          assert 'importer.countMessages' not in svc, 'slow JsonReader pre-count must not be used by service'
+          assert 'materializeMedia' in tree
+          assert 'shouldRenderOnRight' in models
+          assert 'org.jetbrains.kotlin.plugin.compose' in gradle
+          assert 'androidx.compose.material3:material3' in gradle
+          assert 'lottie-compose' in gradle
+          assert 'android.useAndroidX=true' in props
+          print('NATIVE_MATERIAL3_ARCHITECTURE_OK')
+          PY
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - name: Real rclone encrypted-config architecture test
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/rclone-tarjs-test
+          git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git /tmp/rclone-tarjs-test
+          cp ci/rclone_architecture_harness.go /tmp/rclone-tarjs-test/tarjs_architecture_harness.go
+          cd /tmp/rclone-tarjs-test
+          go run ./tarjs_architecture_harness.go
+          cd "$GITHUB_WORKSPACE"
+          rm -rf /tmp/rclone-tarjs-test
+          go clean -modcache || true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
+
+      - name: Real Telegram importer and SQLite tests
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon testDebugUnitTest --tests com.tarjs.archive.TelegramImporterIntegrationTest
+
+      - name: Native UI, message-side, media classification, fast counter tests
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon testDebugUnitTest --tests com.tarjs.archive.NativeUiLogicTest
+
+      - name: Full JVM regression suite
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon testDebugUnitTest
+
+      - name: Build native Material 3 debug APK
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify final APK and exact gomobile runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
+          AAR=source/TAR-JS/app/libs/gomobile.aar
+          test -s "$APK"
+          unzip -Z1 "$APK" | grep -qx 'lib/arm64-v8a/libgojni.so'
+          unzip -p "$AAR" jni/arm64-v8a/libgojni.so | sha256sum > /tmp/aar.sha
+          unzip -p "$APK" lib/arm64-v8a/libgojni.so | sha256sum > /tmp/apk.sha
+          cmp /tmp/aar.sha /tmp/apk.sha
+          sha256sum "$APK"
+          du -h "$APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-native-material3-QA-debug
+          path: source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
