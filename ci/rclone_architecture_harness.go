@@ -45,7 +45,6 @@ remote = dummy:
 password = nCH8gXJp7u0DXC0c1qM
 password2 = nCH8gXJp7u0DXC0c1qM
 `, remoteRoot)
-
     must(config.SetConfigPassword(password))
     src := strings.NewReader(plain)
     dst, err := os.Create(outPath)
@@ -54,15 +53,7 @@ password2 = nCH8gXJp7u0DXC0c1qM
     must(config.Encrypt(src, dst))
 }
 
-func probe(configPath, remoteRoot string) {
-    librclone.Initialize()
-    defer librclone.Finalize()
-
-    rpc("options/set", map[string]any{"main": map[string]any{"AskPassword": false}})
-    rpc("config/unlock", map[string]any{"configPassword": password})
-    rpc("config/setpath", map[string]any{"path": configPath})
-
-    remotes := rpc("config/listremotes", map[string]any{})
+func assertRemotes(remotes map[string]any) {
     names, ok := remotes["remotes"].([]any)
     if !ok {
         panic(fmt.Sprintf("unexpected remotes payload: %#v", remotes))
@@ -80,11 +71,19 @@ func probe(configPath, remoteRoot string) {
     if !seenDummy || !seenCrypt {
         panic(fmt.Sprintf("expected dummy and cryptdummy remotes, got %#v", names))
     }
+}
+
+func probe(configPath string) {
+    librclone.Initialize()
+    defer librclone.Finalize()
+
+    rpc("options/set", map[string]any{"main": map[string]any{"AskPassword": false}})
+    rpc("config/unlock", map[string]any{"configPassword": password})
+    rpc("config/setpath", map[string]any{"path": configPath})
+    assertRemotes(rpc("config/listremotes", map[string]any{}))
 
     listing := rpc("operations/list", map[string]any{
-        "fs":     "dummy:",
-        "remote": "",
-        "opt":    map[string]any{"noModTime": false},
+        "fs": "dummy:", "remote": "", "opt": map[string]any{"noModTime": false},
     })
     entries, ok := listing["list"].([]any)
     if !ok {
@@ -95,12 +94,8 @@ func probe(configPath, remoteRoot string) {
     for _, raw := range entries {
         row := raw.(map[string]any)
         name := fmt.Sprint(row["Name"])
-        if name == "result.json" && row["IsDir"] == false {
-            foundResult = true
-        }
-        if name == "media" && row["IsDir"] == true {
-            foundMediaDir = true
-        }
+        if name == "result.json" && row["IsDir"] == false { foundResult = true }
+        if name == "media" && row["IsDir"] == true { foundMediaDir = true }
     }
     if !foundResult || !foundMediaDir {
         panic(fmt.Sprintf("dummy browse missing expected entries: %#v", entries))
@@ -110,54 +105,59 @@ func probe(configPath, remoteRoot string) {
     must(err)
     defer os.RemoveAll(destDir)
     rpc("operations/copyfile", map[string]any{
-        "srcFs":     "dummy:",
-        "srcRemote": "result.json",
-        "dstFs":     destDir,
-        "dstRemote": "result.json",
+        "srcFs": "dummy:", "srcRemote": "result.json", "dstFs": destDir, "dstRemote": "result.json",
     })
     copied, err := os.ReadFile(filepath.Join(destDir, "result.json"))
     must(err)
     if !strings.Contains(string(copied), `"Dummy Messages"`) {
         panic("copied result.json did not contain dummy Telegram data")
     }
-
     fmt.Println("RCLONE_DUMMY_UNLOCK_LIST_COPY_OK")
 }
 
 func wrongPasswordProbe(configPath string) {
     librclone.Initialize()
     defer librclone.Finalize()
-
     rpc("options/set", map[string]any{"main": map[string]any{"AskPassword": false}})
     rpc("config/unlock", map[string]any{"configPassword": "wrong-password"})
     rpc("config/setpath", map[string]any{"path": configPath})
-
     raw, status := librclone.RPC("config/listremotes", `{}`)
-    if status == 200 {
-        panic("wrong password unexpectedly succeeded")
-    }
-    if !strings.Contains(strings.ToLower(raw), "decrypt") && !strings.Contains(strings.ToLower(raw), "password") {
+    if status == 200 { panic("wrong password unexpectedly succeeded") }
+    lower := strings.ToLower(raw)
+    if !strings.Contains(lower, "decrypt") && !strings.Contains(lower, "password") {
         panic(fmt.Sprintf("wrong password returned unexpected error: %s", raw))
     }
     fmt.Println("RCLONE_WRONG_PASSWORD_RETURNS_ERROR_OK")
 }
 
+func retryPasswordProbe(configPath string) {
+    librclone.Initialize()
+    defer librclone.Finalize()
+    rpc("options/set", map[string]any{"main": map[string]any{"AskPassword": false}})
+    rpc("config/unlock", map[string]any{"configPassword": "wrong-password"})
+    rpc("config/setpath", map[string]any{"path": configPath})
+    _, status := librclone.RPC("config/listremotes", `{}`)
+    if status == 200 { panic("wrong password unexpectedly succeeded before retry") }
+
+    // This matches the Android UI: keep the same librclone process alive and
+    // submit a corrected password after the first unlock attempt failed.
+    rpc("config/unlock", map[string]any{"configPassword": password})
+    assertRemotes(rpc("config/listremotes", map[string]any{}))
+    fmt.Println("RCLONE_WRONG_THEN_CORRECT_PASSWORD_RECOVERY_OK")
+}
+
 func main() {
     if len(os.Args) >= 2 {
         switch os.Args[1] {
-        case "probe":
-            probe(os.Args[2], os.Args[3])
-            return
-        case "wrong":
-            wrongPasswordProbe(os.Args[2])
-            return
+        case "probe": probe(os.Args[2]); return
+        case "wrong": wrongPasswordProbe(os.Args[2]); return
+        case "retry": retryPasswordProbe(os.Args[2]); return
         }
     }
 
     root, err := os.MkdirTemp("", "tarjs-rclone-architecture-")
     must(err)
     defer os.RemoveAll(root)
-
     remoteRoot := filepath.Join(root, "remote")
     must(os.MkdirAll(filepath.Join(remoteRoot, "media"), 0o755))
     resultJSON := `{"about":"dummy","chats":{"list":[{"name":"Dummy Messages","type":"personal_chat","id":1,"messages":[{"id":1,"type":"message","date_unixtime":"1790467200","from":"Dummy Alice","text":"hello"}]}]}}`
@@ -166,30 +166,23 @@ func main() {
 
     configPath := filepath.Join(root, "rclone.conf")
     createEncryptedConfig(configPath, remoteRoot)
-
     exe, err := os.Executable()
     must(err)
-    probeCmd := exec.Command(exe, "probe", configPath, remoteRoot)
-    probeCmd.Stdout = os.Stdout
-    probeCmd.Stderr = os.Stderr
-    must(probeCmd.Run())
-
-    wrongCmd := exec.Command(exe, "wrong", configPath)
-    wrongCmd.Stdout = os.Stdout
-    wrongCmd.Stderr = os.Stderr
-    must(wrongCmd.Run())
+    for _, mode := range []string{"probe", "wrong", "retry"} {
+        cmd := exec.Command(exe, mode, configPath)
+        cmd.Stdout = os.Stdout
+        cmd.Stderr = os.Stderr
+        must(cmd.Run())
+    }
 
     f, err := os.Open(configPath)
     must(err)
     defer f.Close()
     header := make([]byte, 256)
     n, err := f.Read(header)
-    if err != nil && err != io.EOF {
-        panic(err)
-    }
+    if err != nil && err != io.EOF { panic(err) }
     if !strings.Contains(string(header[:n]), "RCLONE_ENCRYPT_V0:") {
         panic("dummy config was not actually encrypted")
     }
-
     fmt.Println("RCLONE_ARCHITECTURE_HARNESS_OK")
 }
