@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 root = Path('source/TAR-JS')
 build = root / 'app/build.gradle.kts'
@@ -13,11 +14,13 @@ if 'org.robolectric:robolectric' not in bt:
     bt = bt.replace(needle, adds, 1)
 build.write_text(bt, encoding='utf-8')
 
-# Robolectric depends on AndroidX test components. TAR-JS itself does not need to
-# migrate UI code to AndroidX, but Gradle must allow those test-runtime libraries.
+# Robolectric depends on AndroidX test components. Force the authoritative project's
+# AndroidX flag on for this QA build even if gradle.properties explicitly set it false.
 props = root / 'gradle.properties'
 pt = props.read_text(encoding='utf-8') if props.exists() else ''
-if 'android.useAndroidX=' not in pt:
+if re.search(r'(?m)^android\.useAndroidX=.*$', pt):
+    pt = re.sub(r'(?m)^android\.useAndroidX=.*$', 'android.useAndroidX=true', pt)
+else:
     if pt and not pt.endswith('\n'):
         pt += '\n'
     pt += 'android.useAndroidX=true\n'
