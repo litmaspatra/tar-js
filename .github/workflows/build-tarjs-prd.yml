@@ -8,6 +8,7 @@ on:
       - 'ci/tarjs_prd_v1.patch.gz.b64'
       - 'ci/patch_single_chat_and_chat_photo.py'
       - 'ci/patch_robolectric_importer_qa.py'
+      - 'ci/patch_background_indexing.py'
       - 'ci/tarjs_ui_harness.js'
       - 'ci/rclone_architecture_harness.go'
       - 'ci/apply_kotlin23_compat.py'
@@ -48,6 +49,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           python3 ci/patch_single_chat_and_chat_photo.py
           python3 ci/patch_robolectric_importer_qa.py
+          python3 ci/patch_background_indexing.py
           python3 ci/apply_kotlin23_compat.py
 
       - name: Architecture contract audit
@@ -60,15 +62,19 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           main=Path('app/src/main/java/com/tarjs/archive/MainActivity.kt').read_text()
+          svc=Path('app/src/main/java/com/tarjs/archive/IndexingService.kt').read_text()
           eng=Path('app/src/main/java/com/tarjs/archive/RcloneEngine.kt').read_text()
           sec=Path('app/src/main/java/com/tarjs/archive/SecureRclonePassword.kt').read_text()
           imp=Path('app/src/main/java/com/tarjs/archive/TelegramImporter.kt').read_text()
           js=Path('app/src/main/assets/web/app.js').read_text()
+          css=Path('app/src/main/assets/web/styles.css').read_text()
+          manifest=Path('app/src/main/AndroidManifest.xml').read_text()
           test=Path('app/src/test/java/com/tarjs/archive/TelegramImporterIntegrationTest.kt').read_text()
           required_main=[
             'RcloneConfigParser.isEncrypted', 'secureRclone.load()', 'secureRclone.save(password)',
             'secureRclone.clear()', 'initializeRcloneForStartup()', 'setChatAvatar(chatId: Long)',
-            'importRcloneFolder(remote: String, path: String)'
+            'importRcloneFolder(remote: String, path: String)', 'IndexingService.startRclone',
+            'IndexingService.startSaf', 'indexStatus()', 'moveTaskToBack(true)'
           ]
           for token in required_main: assert token in main, token
           assert 'TARJS.rescan' not in js[:js.find('function archiveSettings')], 'archive must not rescan on startup'
@@ -77,10 +83,16 @@ jobs:
           for token in ['AskPassword", false','config/unlock','config/setpath','config/listremotes']:
             assert token in eng, token
           assert eng.index('config/unlock') < eng.index('config/setpath')
-          for token in ['rootTelegramChatId','rootMessageCount','"messages" ->','No Telegram chats were found']:
+          for token in ['rootTelegramChatId','rootMessageCount','"messages" ->','No Telegram chats were found','countMessages(','countProgress']:
             assert token in imp, token
-          for token in ['Swap sides','swapSides()','Remember me','Use this folder','Telegram archive detected','Chat appearance','Change chat photo','Chat photo']:
+          for token in ['Foreground','copyFileToLocal','countMessages','START_REDELIVER_INTENT','sourceKey','TAR-JS indexing complete']:
+            assert token in svc, token
+          for token in ['Swap sides','swapSides()','Remember me','Use this folder','Telegram archive detected','Chat appearance','Change chat photo','Chat photo','Indexing status','TARJSNativeBack','indexStateCard']:
             assert token in js, token
+          for token in ['index-card','overflow-sheet']:
+            assert token in css, token
+          for token in ['FOREGROUND_SERVICE_DATA_SYNC','POST_NOTIFICATIONS','.IndexingService']:
+            assert token in manifest, token
           for token in ['RobolectricTestRunner','indexesSingleChatTelegramExportIntoRealDatabase','indexesFullAccountTelegramExportAndMarksOwnerSide']:
             assert token in test, token
           print('ARCHITECTURE_CONTRACT_OK')
@@ -155,11 +167,13 @@ jobs:
           unzip -p "$APK" assets/web/app.js | grep -q 'Use this folder'
           unzip -p "$APK" assets/web/app.js | grep -q 'Remember me'
           unzip -p "$APK" assets/web/app.js | grep -q 'Change chat photo'
+          unzip -p "$APK" assets/web/app.js | grep -q 'messages detected so far'
+          unzip -p "$APK" assets/web/app.js | grep -q 'Indexing status'
           sha256sum "$APK"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TAR-JS-single-chat-indexed-QA-debug
+          name: TAR-JS-background-progress-QA-debug
           path: source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
