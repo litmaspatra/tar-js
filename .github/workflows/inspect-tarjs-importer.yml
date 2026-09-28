@@ -1,0 +1,27 @@
+name: Inspect TAR-JS importer
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/inspect-tarjs-importer.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ci/tarjs_authoritative_20260927_00.b64 ci/tarjs_authoritative_20260927_01.b64 ci/tarjs_authoritative_20260927_02.b64 ci/tarjs_authoritative_20260927_03.b64 ci/tarjs_authoritative_20260927_04.b64 ci/tarjs_authoritative_20260927_05.b64 > /tmp/tarjs.zip.b64
+          base64 --decode /tmp/tarjs.zip.b64 > /tmp/tarjs.zip
+          unzip -q /tmp/tarjs.zip -d source
+          cd source/TAR-JS
+          echo '=== TelegramImporter.kt ==='
+          cat app/src/main/java/com/tarjs/archive/TelegramImporter.kt
+          echo '=== ArchiveDatabase.kt ==='
+          cat app/src/main/java/com/tarjs/archive/ArchiveDatabase.kt
+          echo '=== MainActivity import functions ==='
+          grep -n -A80 -B20 -E 'importRcloneFolder|TelegramImporter|indexed|importJson|result.json' app/src/main/java/com/tarjs/archive/MainActivity.kt || true
