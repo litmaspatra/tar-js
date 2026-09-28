@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Reconstruct source
+      - name: Reconstruct and inspect patched source
         shell: bash
         run: |
           set -euo pipefail
@@ -19,9 +19,11 @@ jobs:
           base64 --decode /tmp/tarjs.zip.b64 > /tmp/tarjs.zip
           unzip -q /tmp/tarjs.zip -d source
           cd source/TAR-JS
-          echo '=== TelegramImporter.kt ==='
-          cat app/src/main/java/com/tarjs/archive/TelegramImporter.kt
-          echo '=== ArchiveDatabase.kt ==='
-          cat app/src/main/java/com/tarjs/archive/ArchiveDatabase.kt
-          echo '=== MainActivity import functions ==='
-          grep -n -A80 -B20 -E 'importRcloneFolder|TelegramImporter|indexed|importJson|result.json' app/src/main/java/com/tarjs/archive/MainActivity.kt || true
+          base64 --decode "$GITHUB_WORKSPACE/ci/tarjs_prd_v1.patch.gz.b64" | gunzip > /tmp/tarjs_prd_v1.patch
+          patch -p2 < /tmp/tarjs_prd_v1.patch
+          echo '=== MainActivity avatar bridge ==='
+          grep -n -A35 -B15 -E 'Avatar|avatar|REQ_OWNER|REQ_AVATAR|choose.*Avatar|profile' app/src/main/java/com/tarjs/archive/MainActivity.kt || true
+          echo '=== app.js avatar/profile/swap UI ==='
+          grep -n -A25 -B12 -E 'avatar|Avatar|profile|Profile|Swap sides|swapSides' app/src/main/assets/web/app.js || true
+          echo '=== index.html settings/profile ==='
+          grep -n -A20 -B10 -E 'profile|Profile|avatar|Avatar|settings' app/src/main/assets/web/index.html || true
