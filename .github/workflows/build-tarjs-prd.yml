@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/build-tarjs-prd.yml'
       - 'ci/tarjs_prd_v1.patch.gz.b64'
+      - 'ci/patch_single_chat_and_chat_photo.py'
       - 'ci/tarjs_ui_harness.js'
       - 'ci/rclone_architecture_harness.go'
       - 'ci/apply_kotlin23_compat.py'
@@ -17,7 +18,7 @@ permissions:
 jobs:
   qa-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +45,7 @@ jobs:
           base64 --decode "$GITHUB_WORKSPACE/ci/tarjs_prd_v1.patch.gz.b64" | gunzip > /tmp/tarjs_prd_v1.patch
           patch -p2 < /tmp/tarjs_prd_v1.patch
           cd "$GITHUB_WORKSPACE"
+          python3 ci/patch_single_chat_and_chat_photo.py
           python3 ci/apply_kotlin23_compat.py
 
       - name: Architecture contract audit
@@ -58,10 +60,11 @@ jobs:
           main=Path('app/src/main/java/com/tarjs/archive/MainActivity.kt').read_text()
           eng=Path('app/src/main/java/com/tarjs/archive/RcloneEngine.kt').read_text()
           sec=Path('app/src/main/java/com/tarjs/archive/SecureRclonePassword.kt').read_text()
+          imp=Path('app/src/main/java/com/tarjs/archive/TelegramImporter.kt').read_text()
           js=Path('app/src/main/assets/web/app.js').read_text()
           required_main=[
             'RcloneConfigParser.isEncrypted', 'secureRclone.load()', 'secureRclone.save(password)',
-            'secureRclone.clear()', 'initializeRcloneForStartup()', 'REQ_OWNER_AVATAR',
+            'secureRclone.clear()', 'initializeRcloneForStartup()', 'setChatAvatar(chatId: Long)',
             'importRcloneFolder(remote: String, path: String)'
           ]
           for token in required_main: assert token in main, token
@@ -71,7 +74,9 @@ jobs:
           for token in ['AskPassword", false','config/unlock','config/setpath','config/listremotes']:
             assert token in eng, token
           assert eng.index('config/unlock') < eng.index('config/setpath')
-          for token in ['Swap sides','swapSides()','Remember me','Use this folder','Telegram archive detected','ownerProfile']:
+          for token in ['rootTelegramChatId','rootMessageCount','"messages" ->','No Telegram chats were found']:
+            assert token in imp, token
+          for token in ['Swap sides','swapSides()','Remember me','Use this folder','Telegram archive detected','Chat appearance','Change chat photo','Chat photo']:
             assert token in js, token
           print('ARCHITECTURE_CONTRACT_OK')
           PY
@@ -117,6 +122,22 @@ jobs:
         working-directory: source/TAR-JS
         run: gradle --stacktrace --no-daemon testDebugUnitTest
 
+      - name: Enable KVM for Android instrumentation QA
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Actual Android importer + SQLite indexing tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: cd source/TAR-JS && gradle --stacktrace --no-daemon connectedDebugAndroidTest
+
       - name: Build debug APK
         working-directory: source/TAR-JS
         run: gradle --stacktrace --no-daemon assembleDebug
@@ -137,11 +158,12 @@ jobs:
           unzip -p "$APK" assets/web/app.js | grep -q 'Swap sides'
           unzip -p "$APK" assets/web/app.js | grep -q 'Use this folder'
           unzip -p "$APK" assets/web/app.js | grep -q 'Remember me'
+          unzip -p "$APK" assets/web/app.js | grep -q 'Change chat photo'
           sha256sum "$APK"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TAR-JS-PRD-full-QA-debug
+          name: TAR-JS-single-chat-indexed-QA-debug
           path: source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
