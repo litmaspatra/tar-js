@@ -99,6 +99,9 @@ jobs:
           cp ci/rclone_architecture_harness.go /tmp/rclone-tarjs-test/tarjs_architecture_harness.go
           cd /tmp/rclone-tarjs-test
           go run ./tarjs_architecture_harness.go
+          cd "$GITHUB_WORKSPACE"
+          rm -rf /tmp/rclone-tarjs-test
+          go clean -modcache || true
 
       - uses: actions/setup-java@v4
         with:
@@ -128,13 +131,18 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+          df -h /
 
       - name: Actual Android importer + SQLite indexing tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 30
           arch: x86_64
-          profile: pixel_6
+          profile: pixel_2
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
+          disk-size: 3072M
           disable-animations: true
           script: cd source/TAR-JS && gradle --stacktrace --no-daemon connectedDebugAndroidTest
 
