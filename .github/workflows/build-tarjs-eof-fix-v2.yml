@@ -1,0 +1,97 @@
+name: Build TAR-JS EOF Fix v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-tarjs-eof-fix-v2.yml'
+      - 'ci/apply_tarjs_eof_fix.py'
+      - 'ci/apply_kotlin23_compat.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct authoritative TAR-JS source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ci/tarjs_authoritative_20260927_00.b64 ci/tarjs_authoritative_20260927_01.b64 ci/tarjs_authoritative_20260927_02.b64 ci/tarjs_authoritative_20260927_03.b64 ci/tarjs_authoritative_20260927_04.b64 ci/tarjs_authoritative_20260927_05.b64 > /tmp/tarjs.zip.b64
+          test "$(wc -c < /tmp/tarjs.zip.b64)" -eq 33303364
+          base64 --decode /tmp/tarjs.zip.b64 > /tmp/TAR-JS-source-gomobile-fixed.zip
+          echo 'ee9bf544762357f7e152e0c25a4539627b6967d336c1a40f2d322724632f2dca  /tmp/TAR-JS-source-gomobile-fixed.zip' | sha256sum -c -
+          unzip -tq /tmp/TAR-JS-source-gomobile-fixed.zip
+          mkdir source
+          unzip -q /tmp/TAR-JS-source-gomobile-fixed.zip -d source
+          chmod -R u+rwX source
+          cd source
+          sha256sum -c "$GITHUB_WORKSPACE/ci/tarjs_authoritative_20260927.sha256"
+
+      - name: Apply runtime and build fixes
+        run: |
+          python3 ci/apply_tarjs_eof_fix.py
+          python3 ci/apply_kotlin23_compat.py
+
+      - name: Validate patched source and dummy fixture
+        shell: bash
+        working-directory: source/TAR-JS
+        run: |
+          set -euo pipefail
+          python3 -c "import json; d=json.load(open('fixtures/result.json')); assert d.get('chats',{}).get('list'); print('DUMMY_JSON_OK')"
+          node --check app/src/main/assets/web/app.js
+          bash tools/verify-rclone-aar.sh app/libs/gomobile.aar
+          grep -q 'AskPassword", false' app/src/main/java/com/tarjs/archive/RcloneEngine.kt
+          grep -q 'if (!encryptedConfig)' app/src/main/java/com/tarjs/archive/MainActivity.kt
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Prepare Android SDK 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
+
+      - name: Run JVM tests
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon testDebugUnitTest
+
+      - name: Build debug APK
+        working-directory: source/TAR-JS
+        run: gradle --stacktrace --no-daemon assembleDebug
+
+      - name: Verify APK gomobile runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
+          AAR=source/TAR-JS/app/libs/gomobile.aar
+          test -s "$APK"
+          unzip -Z1 "$APK" | grep -qx 'lib/arm64-v8a/libgojni.so'
+          unzip -p "$AAR" jni/arm64-v8a/libgojni.so | sha256sum > /tmp/aar.sha
+          unzip -p "$APK" lib/arm64-v8a/libgojni.so | sha256sum > /tmp/apk.sha
+          cmp /tmp/aar.sha /tmp/apk.sha
+          sha256sum "$APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-eof-fixed-debug
+          path: source/TAR-JS/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
