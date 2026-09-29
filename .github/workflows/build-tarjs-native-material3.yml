@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/build-tarjs-native-material3.yml'
       - 'ci/native_material3_v2_*.b64'
+      - 'ci/pin_compose_api36.py'
       - 'ci/tarjs_prd_v1.patch.gz.b64'
       - 'ci/patch_single_chat_and_chat_photo.py'
       - 'ci/patch_robolectric_importer_qa.py'
@@ -59,6 +60,7 @@ jobs:
           echo 'bd3a6cf2e74dc321e8b6fe19334b63d7392b4ee85c241efded6367767803476f  /tmp/native-v2.tar.gz' | sha256sum -c -
           tar -xzf /tmp/native-v2.tar.gz -C source/TAR-JS
           chmod -R u+rwX source/TAR-JS
+          python3 ci/pin_compose_api36.py
 
       - name: Native architecture contract audit
         shell: bash
@@ -95,6 +97,7 @@ jobs:
           assert 'org.jetbrains.kotlin.plugin.compose' in gradle
           assert 'androidx.compose.material3:material3' in gradle
           assert 'lottie-compose' in gradle
+          assert 'resolutionStrategy.eachDependency' in gradle
           assert 'android.useAndroidX=true' in props
           print('NATIVE_MATERIAL3_ARCHITECTURE_OK')
           PY
