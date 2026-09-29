@@ -9,6 +9,7 @@ on:
       - 'ci/native_material3_v2_*.b64'
       - 'ci/pin_compose_api36.py'
       - 'ci/optin_material3_api.py'
+      - 'ci/patch_security_navigation_v3.py'
       - 'ci/tarjs_prd_v1.patch.gz.b64'
       - 'ci/patch_single_chat_and_chat_photo.py'
       - 'ci/patch_robolectric_importer_qa.py'
@@ -63,6 +64,20 @@ jobs:
           chmod -R u+rwX source/TAR-JS
           python3 ci/pin_compose_api36.py
           python3 ci/optin_material3_api.py
+          if [ -f ci/patch_security_navigation_v3.py ]; then python3 ci/patch_security_navigation_v3.py; fi
+
+      - name: Export reconstructed native source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: TAR-JS-native-source-snapshot
+          path: |
+            source/TAR-JS/app/src/main/java/com/tarjs/archive/NativeUi.kt
+            source/TAR-JS/app/src/main/java/com/tarjs/archive/TarJsController.kt
+            source/TAR-JS/app/src/main/java/com/tarjs/archive/ArchiveDatabase.kt
+            source/TAR-JS/app/src/main/java/com/tarjs/archive/Models.kt
+            source/TAR-JS/app/src/main/java/com/tarjs/archive/MainActivity.kt
+          if-no-files-found: error
+          retention-days: 2
 
       - name: Native architecture contract audit
         shell: bash
