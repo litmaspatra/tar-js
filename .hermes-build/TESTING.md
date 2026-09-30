@@ -9,10 +9,10 @@
 
 ## Current-head PRD QA evidence
 
-- Workflow: https://github.com/litmaspatra/tar-js/actions/runs/36732938633
-- Commit: d7f6918c5d6154d42dd83d32f3ff1041e0f57787
-- Artifact: TAR-JS-background-progress-QA-debug, artifact ID 11107165148, 25,425,502 bytes, not expired
-- APK SHA-256 printed by workflow: 1b6571ff78a14d1ca99b8ae5bc564c144ef5ef3cae9b6720ddbb1dd5c4d02c36
+- Workflow: https://github.com/litmaspatra/tar-js/actions/runs/36734501080
+- Commit: 3193d5b38461531383b520d510791a2de2fc9889
+- Artifact: TAR-JS-background-progress-QA-debug, artifact ID 11105843748, 25,425,499 bytes, not expired
+- APK SHA-256 printed by workflow: 5fc38e6971149b2d6f7c7b781438b96c1de023e1d171a8fa2734f0bd9ed1373c
 - Verification included native `lib/arm64-v8a/libgojni.so`, exact AAR-to-APK native hash comparison, patched web assets, importer integration tests, full JVM regression tests, and UI/architecture contracts.
 
 ## Screen matrix
