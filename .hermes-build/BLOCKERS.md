@@ -1,5 +1,8 @@
 # Blockers
 
-- Phase 0 gate evidence is available in GitHub run 36738087347, but Phase 0 is not marked COMPLETE until the architecture/design review records all required exclusions and the remaining legacy metadata is audited.
-- Device rendering is unavailable in this workspace; screen matrix is UNVERIFIED.
-- Foreground indexing, rclone providers, secure remembered rclone password, native media composables, profile crop, bidirectional paging, Superpowers, and Ponytail remain incomplete.
+- Phase 2 is ACTIVE but BLOCKED: the local workspace has no `gradle` executable and no project Gradle wrapper, so the new Kotlin sources and tests cannot be compiled or executed here.
+- `RcloneConfigParser` now covers UTF-8 BOMs, blank lines, `#`/`;` full-line comments, remotes, and crypt backend references; it does not yet perform rclone's encrypted-config password unlock or remote listing I/O.
+- `KeystoreSecretStore` provides Android Keystore AES-GCM storage for a remembered rclone config password, but it is not wired into an import/settings UI and cannot be device-tested here.
+- `SafArchiveSource` provides persistable read permission, recursive `result.json` discovery, and read-only opening; SAF UI wiring and device verification remain pending.
+- Device rendering is unavailable; the UI evidence matrix remains UNVERIFIED.
+- Foreground indexing, native media composables, profile crop, bidirectional paging, Superpowers, Ponytail, and authoritative Phase 2 GitHub APK provenance remain blocked behind this gate.

@@ -29,3 +29,7 @@
 | Media/profile/settings | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 
 No screen is marked PASS without rendered device evidence.
+- Phase 2 unit-test evidence: UNVERIFIED — `gradle --no-daemon testDebugUnitTest` could not start (`gradle: command not found`).
+- Phase 2 lint evidence: UNVERIFIED — local Gradle executable unavailable.
+- Phase 2 debug APK evidence: UNVERIFIED — local Gradle executable unavailable; do not use the existing 16.9 MB scaffold APK as Phase 2 evidence.
+- Phase 2 device/UI evidence: UNVERIFIED — no emulator/device rendering workflow available in this workspace.
