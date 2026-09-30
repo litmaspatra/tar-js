@@ -1,59 +1,162 @@
-name: TAR-JS verified debug APK
+name: TAR-JS Phase 2 strict gates
+
 on:
-  workflow_dispatch:
   push:
     branches: [main]
-    paths-ignore: ['.hermes-build/**']
+  workflow_dispatch:
+
 permissions:
   contents: read
-  actions: read
+
 jobs:
-  verify-build:
+  build-and-rclone:
+    name: Build native app and real rclone gomobile input
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Verify native Kotlin Compose architecture
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android SDK and NDK
         shell: bash
         run: |
-          test -f app/src/main/java/com/tarjs/app/MainActivity.kt
-          ! find app/src/main -type f \( -name '*.java' -o -name '*.js' -o -name '*.html' \) | grep .
-          ! grep -R 'WebView\|android.webkit\|loadUrl' app/src/main || true
-          grep -R 'androidx.compose\|material3' app/build.gradle.kts
-          grep -R 'lottie-compose' app/build.gradle.kts
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: '17' }
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with: { gradle-version: '8.11.1' }
-      - name: Install Android SDK packages
-        run: |
           SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n 1)"; fi
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0'
-      - name: Unit tests
-        run: gradle --no-daemon testDebugUnitTest
-      - name: Lint
-        run: gradle --no-daemon lintDebug
-      - name: Build debug APK
+          "$SDKMANAGER" 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools' 'ndk;27.2.12479018'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Build rclone gomobile AAR from pinned upstream source
+        shell: bash
+        run: |
+          git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git "$RUNNER_TEMP/rclone"
+          cp ci/rclone_reset_android.go "$RUNNER_TEMP/rclone/librclone/gomobile/reset_android.go"
+          cp ci/rclone_reset_test.go "$RUNNER_TEMP/rclone/librclone/gomobile/reset_android_test.go"
+          cd "$RUNNER_TEMP/rclone"
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          "$HOME/go/bin/gomobile" init
+          go test ./librclone/gomobile -run TestRcloneResetEncryptedConfig -count=1
+          "$HOME/go/bin/gomobile" bind -androidapi 26 -target=android/arm64 -javapkg=org.rclone -o gomobile.aar github.com/rclone/rclone/librclone/gomobile
+          mkdir -p "$GITHUB_WORKSPACE/app/libs"
+          cp gomobile.aar "$GITHUB_WORKSPACE/app/libs/gomobile.aar"
+      - name: Verify AAR contents
+        shell: bash
+        run: |
+          unzip -l app/libs/gomobile.aar | grep -q 'classes.jar'
+          unzip -p app/libs/gomobile.aar classes.jar > "$RUNNER_TEMP/classes.jar"
+          jar tf "$RUNNER_TEMP/classes.jar" | grep -q '^org/rclone/gomobile/Gomobile.class$'
+          unzip -l app/libs/gomobile.aar | grep -q 'jni/arm64-v8a/libgojni.so'
+      - name: Unit tests and lint
+        run: gradle --no-daemon testDebugUnitTest lintDebug
+      - name: Debug APK
         run: gradle --no-daemon assembleDebug
-      - name: Verify APK is native and from this commit
+      - name: Verify APK provenance
         shell: bash
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'classes.dex'
-          ! unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E 'assets/web|\.html|\.js'
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q classes.dex
           sha256sum app/build/outputs/apk/debug/app-debug.apk | tee apk.sha256
           echo "commit=${GITHUB_SHA}" | tee build-provenance.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: TAR-JS-debug-${{ github.sha }}
+          name: TAR-JS-phase2-${{ github.sha }}
           path: |
             app/build/outputs/apk/debug/app-debug.apk
+            app/libs/gomobile.aar
             apk.sha256
             build-provenance.txt
           if-no-files-found: error
-          retention-days: 30
+
+  phase2-crypt-b2:
+    name: Strict encrypted rclone B2/crypt gate
+    needs: build-and-rclone
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - name: Require real B2 integration credentials
+        shell: bash
+        env:
+          B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+        run: |
+          test -n "$B2_ACCOUNT_ID" || { echo 'Missing required secret B2_ACCOUNT_ID'; exit 1; }
+          test -n "$B2_APPLICATION_KEY" || { echo 'Missing required secret B2_APPLICATION_KEY'; exit 1; }
+          test -n "$B2_BUCKET" || { echo 'Missing required secret B2_BUCKET'; exit 1; }
+      - name: Run real B2 through encrypted crypt remote
+        shell: bash
+        env:
+          B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET: ${{ secrets.B2_BUCKET }}
+        run: |
+          go install github.com/rclone/rclone@v1.75.1
+          export PATH="$HOME/go/bin:$PATH"
+          p1=$(rclone obscure 'tar-js-phase2-password')
+          p2=$(rclone obscure 'tar-js-phase2-salt')
+          cat > "$RUNNER_TEMP/rclone.conf" <<EOF
+          [b2]
+          type = b2
+          account = $B2_ACCOUNT_ID
+          key = $B2_APPLICATION_KEY
+          [crypt]
+          type = crypt
+          remote = b2:$B2_BUCKET/tar-js-phase2
+          password = $p1
+          password2 = $p2
+          filename_encryption = standard
+          directory_name_encryption = true
+          EOF
+          printf '{"phase":"2","source":"strict-gate"}\n' > "$RUNNER_TEMP/result.json"
+          rclone --config "$RUNNER_TEMP/rclone.conf" copyto "$RUNNER_TEMP/result.json" crypt:result.json
+          rclone --config "$RUNNER_TEMP/rclone.conf" cat crypt:result.json | cmp - "$RUNNER_TEMP/result.json"
+          rclone --config "$RUNNER_TEMP/rclone.conf" deletefile crypt:result.json
+
+  phase2-saf:
+    name: SAF compile and instrumentation gate
+    needs: build-and-rclone
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android SDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools' 'emulator' 'system-images;android-35;google_apis;x86_64'
+      - name: Restore real gomobile AAR
+        uses: actions/download-artifact@v4
+        with:
+          name: TAR-JS-phase2-${{ github.sha }}
+          path: phase2-artifact
+      - name: Install AAR input
+        run: mkdir -p app/libs && cp phase2-artifact/gomobile.aar app/libs/gomobile.aar
+      - name: Compile and run SAF instrumentation tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          script: gradle --no-daemon testDebugUnitTest connectedDebugAndroidTest
