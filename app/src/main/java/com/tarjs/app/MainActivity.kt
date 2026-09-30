@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,10 +60,12 @@ class TarVm: ViewModel(){
 
 @Composable fun LockScreen(vm:TarVm){ var code by remember{mutableStateOf("")}; var confirm by remember{mutableStateOf("")}; val first=!vm.setup; Column(Modifier.fillMaxSize().padding(28.dp),verticalArrangement=Arrangement.Center){ Text("TAR-JS",fontSize=38.sp,fontWeight=FontWeight.Bold,color=Lavender); Spacer(Modifier.height(12.dp)); Text(if(first)"A private home for exported Telegram chats." else "Unlock your private archive",fontSize=20.sp,color=Ink); Spacer(Modifier.height(28.dp)); OutlinedTextField(code,{code=it},label={Text(if(first)"Create passcode" else "Passcode")},singleLine=true); if(first){Spacer(Modifier.height(12.dp));OutlinedTextField(confirm,{confirm=it},label={Text("Confirm passcode")},singleLine=true)}; Spacer(Modifier.height(18.dp)); Button(onClick={if(!first||code==confirm)vm.unlock(code)},enabled=code.length>=4&&(!first||code==confirm),modifier=Modifier.fillMaxWidth().height(52.dp)){Text(if(first)"Create passcode" else "Unlock")}; if(vm.setup&&!vm.unlocked) Text("Wrong passcode. Chats remain locked.",color=MaterialTheme.colorScheme.error,modifier=Modifier.padding(top=12.dp)) } }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable fun HomeScreen(vm:TarVm,onAdd:()->Unit){ Scaffold(topBar={TopAppBar(title={Text("TAR-JS",fontWeight=FontWeight.Bold)},actions={IconButton(onClick={vm.clear()}){Icon(Icons.Default.Delete,"Clear archive")}})},floatingActionButton={FloatingActionButton(onClick=onAdd){Icon(Icons.Default.Add,"Add chats")}}){ pad-> Column(Modifier.padding(pad).padding(horizontal=16.dp)){ if(vm.chats.isEmpty()){Spacer(Modifier.height(70.dp));Text("Your chats, kept private.",fontSize=28.sp,fontWeight=FontWeight.Bold);Text("Import a Telegram result.json from local storage to begin.",fontSize=16.sp,modifier=Modifier.padding(top=10.dp,bottom=22.dp));Button(onClick=onAdd){Text("Add your chats")}; Spacer(Modifier.height(18.dp));Text("Supported: full-account and single-chat Telegram exports.",color=Color.Gray)} else {Text("Your conversations",fontSize=24.sp,fontWeight=FontWeight.Bold,modifier=Modifier.padding(vertical=18.dp));LazyColumn(verticalArrangement=Arrangement.spacedBy(8.dp)){items(vm.chats){chat->ChatRow(chat){vm.open(chat)}}} } } } }
 
 @Composable fun ChatRow(chat:Chat,onClick:()->Unit){Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).clickable(onClick=onClick).padding(14.dp),verticalAlignment=Alignment.CenterVertically){Box(Modifier.size(52.dp).clip(CircleShape).background(Lavender),contentAlignment=Alignment.Center){Text(chat.title.take(1).uppercase(),color=Color.White,fontSize=22.sp,fontWeight=FontWeight.Bold)};Column(Modifier.padding(start=14.dp).weight(1f)){Text(chat.title,fontWeight=FontWeight.SemiBold,fontSize=17.sp);Text(chat.preview.ifBlank{"No text messages"},maxLines=1,color=Color.Gray,fontSize=14.sp)};Text(chat.count.toString(),color=Color.Gray)}}
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable fun ChatScreen(vm:TarVm){
     val chat=vm.selected?:return
     var menu by remember{mutableStateOf(false)}
