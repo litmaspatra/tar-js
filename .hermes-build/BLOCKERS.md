@@ -1,8 +1,6 @@
 # Blockers
 
-- Phase 2 is ACTIVE but BLOCKED: the local workspace has no `gradle` executable and no project Gradle wrapper, so the new Kotlin sources and tests cannot be compiled or executed here.
-- `RcloneConfigParser` now covers UTF-8 BOMs, blank lines, `#`/`;` full-line comments, remotes, and crypt backend references; it does not yet perform rclone's encrypted-config password unlock or remote listing I/O.
-- `KeystoreSecretStore` provides Android Keystore AES-GCM storage for a remembered rclone config password, but it is not wired into an import/settings UI and cannot be device-tested here.
-- `SafArchiveSource` provides persistable read permission, recursive `result.json` discovery, and read-only opening; SAF UI wiring and device verification remain pending.
-- Device rendering is unavailable; the UI evidence matrix remains UNVERIFIED.
-- Foreground indexing, native media composables, profile crop, bidirectional paging, Superpowers, Ponytail, and authoritative Phase 2 GitHub APK provenance remain blocked behind this gate.
+- The deterministic local contract is intentionally not a real B2 integration: it uses rclone's local backend as a safe object-store double with mock-only credentials and is evidence only for crypt/path/listing/copy behavior.
+- Real B2 remains BLOCKED because `B2_ACCOUNT_ID`, `B2_APPLICATION_KEY`, and `B2_BUCKET` are absent by policy; do not add dummy values to that gate.
+- SAF now has a minimal in-process `DocumentsProvider` fixture and a 5-second-bounded recursive `result.json` instrumentation test. GitHub emulator execution is still unverified until the updated workflow runs; local device rendering is unavailable.
+- Phase 2 remains BLOCKED overall: the provider/UI wiring, rendered device evidence, foreground indexing, native media composables, profile crop, bidirectional paging, Superpowers, Ponytail, and authoritative Phase 2 GitHub APK provenance remain incomplete.

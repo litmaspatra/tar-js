@@ -16,7 +16,11 @@
 | APK downloaded/hash/content | PASS | 16,914,780 bytes; SHA-256 `30cfbeeb59fd159d262be73c4231ee666dc7923a09d79cfacd1a1aa1e990da3e`; provenance commit matches; contains classes.dex and no web assets |
 | TGS gzip core test | IMPLEMENTED | `TarJsCoreTest.tgsIsDecompressed` |
 | identity-side core test | IMPLEMENTED | `TarJsCoreTest.ownerIsRightAndOtherIsLeft` |
-| archive cache isolation test | IMPLEMENTED | `TarJsCoreTest.cacheKeySeparatesArchives` |
+| Rclone encrypted-config wrong-password retry | PASS (CI-covered) | `ci/rclone_reset_test.go`; wrong unlock cannot dump, correct retry dumps both remotes |
+| Local B2/crypt/rclone contract | PASS (host-verified; CI job added) | `.github/workflows/build-debug.yml` `phase2-local-contract`; local filesystem object-store double, encrypted crypt paths, listremotes/listing/nested result/media copy/cat/delete |
+| Real B2 integration | BLOCKED | `phase2-crypt-b2` requires intentionally absent `B2_ACCOUNT_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET`; local contract is not equivalent |
+| SAF recursive result.json instrumentation fixture | IMPLEMENTED (CI job added; run pending) | `FixtureDocumentsProvider` + `SafArchiveSourceInstrumentedTest`, 5s test timeout |
+| SAF emulator/device gate | BLOCKED pending CI run | emulator invocation now uses no-window/no-audio/no-boot-anim, disabled animations, and a 15m bounded Gradle timeout |
 
 ## Screen matrix
 | Screen | Light/dark | widths | back/insets | states | accessibility/touch | Result |

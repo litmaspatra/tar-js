@@ -79,7 +79,7 @@ jobs:
           if-no-files-found: error
 
   phase2-crypt-b2:
-    name: Strict encrypted rclone B2/crypt gate
+    name: Strict encrypted rclone B2 credential gate
     needs: build-and-rclone
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -89,7 +89,7 @@ jobs:
         with:
           go-version: '1.26.6'
           cache: false
-      - name: Require real B2 integration credentials
+      - name: Require real B2 integration credentials (not available in dummy CI)
         shell: bash
         env:
           B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
@@ -99,7 +99,7 @@ jobs:
           test -n "$B2_ACCOUNT_ID" || { echo 'Missing required secret B2_ACCOUNT_ID'; exit 1; }
           test -n "$B2_APPLICATION_KEY" || { echo 'Missing required secret B2_APPLICATION_KEY'; exit 1; }
           test -n "$B2_BUCKET" || { echo 'Missing required secret B2_BUCKET'; exit 1; }
-      - name: Run real B2 through encrypted crypt remote
+      - name: Run real B2 through encrypted crypt remote (credential-gated)
         shell: bash
         env:
           B2_ACCOUNT_ID: ${{ secrets.B2_ACCOUNT_ID }}
@@ -127,6 +127,50 @@ jobs:
           rclone --config "$RUNNER_TEMP/rclone.conf" copyto "$RUNNER_TEMP/result.json" crypt:result.json
           rclone --config "$RUNNER_TEMP/rclone.conf" cat crypt:result.json | cmp - "$RUNNER_TEMP/result.json"
           rclone --config "$RUNNER_TEMP/rclone.conf" deletefile crypt:result.json
+
+  phase2-local-contract:
+    name: Deterministic local B2/crypt/rclone contract gate
+    needs: build-and-rclone
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.6'
+          cache: false
+      - name: Run local object-store double through crypt
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install github.com/rclone/rclone@v1.75.1
+          export PATH="$HOME/go/bin:$PATH"
+          root="$RUNNER_TEMP/local-object-store"
+          mkdir -p "$root"
+          p1=$(rclone obscure 'tar-js-dummy-password')
+          p2=$(rclone obscure 'tar-js-dummy-salt')
+          cat > "$RUNNER_TEMP/local-rclone.conf" <<EOF
+          [dummyb2]
+          type = local
+          remote = $root
+          [b2crypt]
+          type = crypt
+          remote = dummyb2:telegram
+          password = $p1
+          password2 = $p2
+          filename_encryption = standard
+          directory_name_encryption = true
+          EOF
+          test "$(rclone --config "$RUNNER_TEMP/local-rclone.conf" listremotes)" = $'dummyb2:\nb2crypt:'
+          rclone --config "$RUNNER_TEMP/local-rclone.conf" copyto fixtures/local-remote/telegram/exports/2026/result.json b2crypt:exports/2026/result.json
+          rclone --config "$RUNNER_TEMP/local-rclone.conf" copyto fixtures/local-remote/telegram/exports/2026/media/photo.txt b2crypt:exports/2026/media/photo.txt
+          rclone --config "$RUNNER_TEMP/local-rclone.conf" lsf --recursive b2crypt:exports/2026 | grep -Fx 'result.json'
+          rclone --config "$RUNNER_TEMP/local-rclone.conf" lsf --recursive b2crypt:exports/2026/media | grep -Fx 'photo.txt'
+          rclone --config "$RUNNER_TEMP/local-rclone.conf" cat b2crypt:/exports/2026/result.json > "$RUNNER_TEMP/result.json"
+          cmp fixtures/local-remote/telegram/exports/2026/result.json "$RUNNER_TEMP/result.json"
+          rclone --config "$RUNNER_TEMP/local-rclone.conf" deletefile b2crypt:exports/2026/result.json
+          ! rclone --config "$RUNNER_TEMP/local-rclone.conf" cat b2crypt:exports/2026/result.json >/dev/null 2>&1
+          echo 'LOCAL_CONTRACT=PASS (local filesystem object-store double; not real B2)'
 
   phase2-saf:
     name: SAF compile and instrumentation gate
@@ -159,4 +203,6 @@ jobs:
           api-level: 35
           arch: x86_64
           target: google_apis
-          script: gradle --no-daemon testDebugUnitTest connectedDebugAndroidTest
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: timeout 15m gradle --no-daemon testDebugUnitTest connectedDebugAndroidTest
