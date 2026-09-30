@@ -10,9 +10,10 @@
 | Check | Status | Evidence |
 |---|---|---|
 | Local Gradle tests | BLOCKED | Java/Gradle unavailable on Android host |
-| GitHub unit tests | PENDING | Must run on new commit |
-| GitHub lint | PENDING | Must run on new commit |
-| GitHub debug APK | PENDING | Must verify artifact commit/hash/contents |
+| GitHub unit tests | PASS | Run 36738087347, commit 5e7736315cc3920ce67a7cf6d483f23441010f05 |
+| GitHub lint | PASS | Run 36738087347 |
+| GitHub debug APK | PASS | Run 36738087347; artifact `TAR-JS-debug-5e7736315cc3920ce67a7cf6d483f23441010f05` |
+| APK downloaded/hash/content | PASS | 16,914,780 bytes; SHA-256 `3ff2588cc2fb67924cf92f6ca78e7cdb444c087e388a0c03b84270880e0e7f41`; provenance commit matches; contains classes.dex and no web assets |
 | TGS gzip core test | IMPLEMENTED | `TarJsCoreTest.tgsIsDecompressed` |
 | identity-side core test | IMPLEMENTED | `TarJsCoreTest.ownerIsRightAndOtherIsLeft` |
 | archive cache isolation test | IMPLEMENTED | `TarJsCoreTest.cacheKeySeparatesArchives` |
