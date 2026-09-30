@@ -152,7 +152,7 @@ jobs:
           name: TAR-JS-phase2-${{ github.sha }}
           path: phase2-artifact
       - name: Install AAR input
-        run: mkdir -p app/libs && cp phase2-artifact/gomobile.aar app/libs/gomobile.aar
+        run: mkdir -p app/libs && find phase2-artifact -name gomobile.aar -type f -exec cp {} app/libs/gomobile.aar \; && test -s app/libs/gomobile.aar
       - name: Compile and run SAF instrumentation tests on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
