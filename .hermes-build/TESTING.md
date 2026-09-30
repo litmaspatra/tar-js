@@ -10,10 +10,10 @@
 | Check | Status | Evidence |
 |---|---|---|
 | Local Gradle tests | BLOCKED | Java/Gradle unavailable on Android host |
-| GitHub unit tests | PASS | Run 36738087347, commit 5e7736315cc3920ce67a7cf6d483f23441010f05 |
-| GitHub lint | PASS | Run 36738087347 |
-| GitHub debug APK | PASS | Run 36738087347; artifact `TAR-JS-debug-5e7736315cc3920ce67a7cf6d483f23441010f05` |
-| APK downloaded/hash/content | PASS | 16,914,780 bytes; SHA-256 `3ff2588cc2fb67924cf92f6ca78e7cdb444c087e388a0c03b84270880e0e7f41`; provenance commit matches; contains classes.dex and no web assets |
+| GitHub unit tests | PASS | Run 36739064738, commit 70531e7929b01478d90d9c65f573722af797e5b5 |
+| GitHub lint | PASS | Run 36739064738 |
+| GitHub debug APK | PASS | Run 36739064738; artifact `TAR-JS-debug-70531e7929b01478d90d9c65f573722af797e5b5` |
+| APK downloaded/hash/content | PASS | 16,914,780 bytes; SHA-256 `30cfbeeb59fd159d262be73c4231ee666dc7923a09d79cfacd1a1aa1e990da3e`; provenance commit matches; contains classes.dex and no web assets |
 | TGS gzip core test | IMPLEMENTED | `TarJsCoreTest.tgsIsDecompressed` |
 | identity-side core test | IMPLEMENTED | `TarJsCoreTest.ownerIsRightAndOtherIsLeft` |
 | archive cache isolation test | IMPLEMENTED | `TarJsCoreTest.cacheKeySeparatesArchives` |
