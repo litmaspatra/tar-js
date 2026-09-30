@@ -196,7 +196,7 @@ jobs:
           kinds = {p.name for p in (root / 'media').iterdir()}
           assert {'static.webp','video.mp4','audio.mp3','voice.ogg','file.bin','animated.tgs','sticker.webm'} <= kinds
           assert gzip.decompress((root / 'media' / 'animated.tgs').read_bytes()).startswith(b'{')
-          assert (root / 'plain-rclone.conf').read_bytes().startswith(b'\\xef\\xbb\\xbf')
+          assert (root / 'plain-rclone.conf').read_bytes().startswith(bytes.fromhex('efbbbf'))
           print('FIXTURE_MATRIX=PASS chats=2 messages=8 media=7 rich/reply/forward/edited/service covered')
           PY
       - name: Run deterministic local crypt contract using committed fixture
