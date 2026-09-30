@@ -1,0 +1,9 @@
+{
+  "personal_information": {"user_information": {"user_id": "42", "first_name": "Kartik"}},
+  "chats": {"list": [{"name":"Dummy Alice","type":"personal_chat","id":1,"messages":[
+    {"id":1,"type":"message","date":"2026-09-30T10:00:00","from":"Dummy Alice","from_id":"7","text":"Hey"},
+    {"id":2,"type":"message","date":"2026-09-30T10:01:00","from":"Kartik","from_id":"42","text":"Hello"},
+    {"id":3,"type":"message","date":"2026-09-30T10:02:00","from":"Kartik","from_id":"42","text":"How are you?"},
+    {"id":4,"type":"message","date":"2026-09-30T10:03:00","from":"Dummy Alice","from_id":"7","text":"Good"}
+  ]}]}
+}

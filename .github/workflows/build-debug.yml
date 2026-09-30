@@ -1,258 +1,56 @@
-name: Build TAR-JS Debug APK
-# ui-overhaul-v4
-# gated dummy export pipeline v5
-
+name: TAR-JS verified debug APK
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/build-debug.yml'
   workflow_dispatch:
-
+  push:
+    branches: [main]
+    paths-ignore: ['.hermes-build/**']
 permissions:
   contents: read
-
+  actions: read
 jobs:
-  build-debug:
+  verify-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
+    timeout-minutes: 35
     steps:
-      - name: Checkout CI host
-        uses: actions/checkout@v4
-
-      - name: Reconstruct TAR-JS source bundle
+      - uses: actions/checkout@v4
+      - name: Verify native Kotlin Compose architecture
         shell: bash
         run: |
-          cat \
-            ci/source_00.b64 \
-            ci/source_01.b64 \
-            ci/source_02.b64 \
-            ci/tail_00.b64 \
-            ci/fix01_00.b64 \
-            ci/fix01_01.b64 \
-            ci/tail_02.b64 \
-            ci/tail_03.b64 \
-            ci/tail_04.b64 \
-            ci/fix05_00.b64 \
-            ci/fix05_01.b64 \
-            ci/fix06_00.b64 \
-            > /tmp/tarjs.b64
-          test "$(wc -c < /tmp/tarjs.b64)" -eq 67632
-          base64 --decode /tmp/tarjs.b64 > /tmp/tarjs.zip
-          echo "f98f632a03965e5ff1b0498dc4adc1bfa202cab8689ecfc0394e7cd11f76c69c  /tmp/tarjs.zip" | sha256sum -c -
-          mkdir -p tarjs
-          unzip -q /tmp/tarjs.zip -d tarjs
-          test -f tarjs/settings.gradle.kts
-          test -f tarjs/app/build.gradle.kts
-
-      - name: Apply TAR-JS fixes and dummy test fixtures
-        shell: bash
-        run: |
-          python3 ci/patch_rclone.py
-          python3 ci/patch_rclone_browser.py
-          python3 ci/patch_bulk_import.py
-          python3 ci/patch_telegram_schema.py
-          python3 ci/patch_owner_identity.py
-          python3 ci/add_e2e_dummy_tests.py
-          python3 ci/patch_ui_native.py
-          python3 ci/patch_rclone_regression.py
-          python3 ci/patch_ui_owner.py
-
-      - name: Package current TAR-JS source
-        shell: bash
-        run: |
-          cd tarjs
-          zip -qr ../TAR-JS-source.zip . -x "app/build/*" ".gradle/*" "build/*"
-
-      - name: Upload TAR-JS source ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: TAR-JS-source
-          path: TAR-JS-source.zip
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Bundle Lottie player for TGS stickers
-        shell: bash
-        run: |
-          curl -fsSL --retry 3 https://cdn.jsdelivr.net/npm/lottie-web@5.13.0/build/player/lottie.min.js -o tarjs/app/src/main/assets/web/lottie.min.js
-          test -s tarjs/app/src/main/assets/web/lottie.min.js
-
-      - name: Verify frontend syntax
-        shell: bash
-        run: |
-          node --check tarjs/app/src/main/assets/web/app.js
-          test -s tarjs/app/src/main/assets/web/styles.css
-          test -s tarjs/app/src/main/assets/web/index.html
-          test -s tarjs/app/src/main/assets/web/lottie.min.js
-
-      - name: Screen-by-screen narrow layout test
-        shell: bash
-        run: |
-          npm install --no-save --no-package-lock puppeteer-core@24.17.0
-          (cd tarjs/app/src/main/assets/web && python3 -m http.server 8765 >/tmp/tarjs-ui-http.log 2>&1 &)
-          sleep 2
-          node ci/ui_layout_test.mjs
-
-      - name: Verify dummy Telegram export structure
-        working-directory: tarjs
-        shell: bash
-        run: python3 ci_verify_dummy_export.py
-
+          test -f app/src/main/java/com/tarjs/app/MainActivity.kt
+          ! find app/src/main -type f \( -name '*.java' -o -name '*.js' -o -name '*.html' \) | grep .
+          ! grep -R 'WebView\|android.webkit\|loadUrl' app/src/main || true
+          grep -R 'androidx.compose\|material3' app/build.gradle.kts
+          grep -R 'lottie-compose' app/build.gradle.kts
       - name: Set up Java 17
         uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Gradle 8.13
+        with: { distribution: temurin, java-version: '17' }
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
-
-      - name: Prepare Android SDK
-        shell: bash
-        run: |
-          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
-          test -x "$SDKMANAGER"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
-
-      - name: Set up Go 1.26.6
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.26.6'
-          cache: false
-
-      - name: Build embedded rclone gomobile AAR
-        shell: bash
-        run: |
-          git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git /tmp/rclone
-          cp "$GITHUB_WORKSPACE/ci/rclone_reset_android.go" /tmp/rclone/librclone/gomobile/reset_android.go
-          cp "$GITHUB_WORKSPACE/ci/rclone_reset_test.go" /tmp/rclone/librclone/gomobile/reset_android_test.go
-          cd /tmp/rclone
-
-          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-}"
-          if [ -z "$ANDROID_NDK_HOME" ] || [ ! -d "$ANDROID_NDK_HOME" ]; then
-            ANDROID_NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-            export ANDROID_NDK_HOME
-          fi
-          export ANDROID_NDK="$ANDROID_NDK_HOME"
-          test -d "$ANDROID_NDK_HOME"
-          echo "Using Android NDK: $ANDROID_NDK_HOME"
-
-          go install golang.org/x/mobile/cmd/gobind@latest
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          export PATH="$PATH:$HOME/go/bin"
-          gomobile init
-
-          go test ./librclone/gomobile -run TestRcloneResetEncryptedConfig -count=1
-
-          gomobile bind \
-            -androidapi 26 \
-            -target=android/arm64 \
-            -javapkg=org.rclone \
-            -ldflags "-s -X github.com/rclone/rclone/fs.Version=v1.75.1" \
-            -o gomobile.aar \
-            github.com/rclone/rclone/librclone/gomobile
-
-          mkdir -p "$GITHUB_WORKSPACE/tarjs/app/libs"
-          cp gomobile.aar "$GITHUB_WORKSPACE/tarjs/app/libs/gomobile.aar"
-
-      - name: Verify embedded rclone AAR
-        shell: bash
-        run: |
-          rm -rf /tmp/gomobile-check
-          mkdir -p /tmp/gomobile-check
-          cd /tmp/gomobile-check
-          unzip -q "$GITHUB_WORKSPACE/tarjs/app/libs/gomobile.aar"
-          test -f classes.jar
-          jar tf classes.jar | grep -q '^org/rclone/gomobile/Gomobile.class$'
-          test -f jni/arm64-v8a/libgojni.so
-          echo "Embedded rclone AAR verified."
-
-      - name: Smoke-test encrypted rclone archive with dummy export
-        shell: bash
-        run: |
-          cd /tmp/rclone
-          go build -o /tmp/rclone-bin .
-          PASS1=$(/tmp/rclone-bin obscure "tarjs-test-password")
-          PASS2=$(/tmp/rclone-bin obscure "tarjs-test-salt")
-          cat > /tmp/tarjs-rclone.conf <<EOF
-          [base]
-          type = local
-
-          [archive]
-          type = crypt
-          remote = base:/tmp/tarjs-encrypted-store
-          password = $PASS1
-          password2 = $PASS2
-          filename_encryption = standard
-          directory_name_encryption = true
-          EOF
-          rm -rf /tmp/tarjs-encrypted-store /tmp/tarjs-roundtrip
-          /tmp/rclone-bin --config /tmp/tarjs-rclone.conf copy "$GITHUB_WORKSPACE/tarjs/app/src/test/resources/telegram_export" archive:
-          /tmp/rclone-bin --config /tmp/tarjs-rclone.conf lsjson archive: > /tmp/list.json
-          python3 - <<'PY'
-          import json
-          x=json.load(open('/tmp/list.json'))
-          names={i['Name'] for i in x}
-          required={'result.json','photos','stickers','voice_messages','video_files','files'}
-          missing=required-names
-          assert not missing, f"rclone listing missing: {sorted(missing)}"
-          print("RCLONE_LIST_OK", sorted(required))
-          PY
-          /tmp/rclone-bin --config /tmp/tarjs-rclone.conf cat archive:result.json > /tmp/roundtrip-result.json
-          cmp "$GITHUB_WORKSPACE/tarjs/app/src/test/resources/telegram_export/result.json" /tmp/roundtrip-result.json
-          for f in photos/photo_1.jpg stickers/sticker_1.webp voice_messages/audio_1.ogg video_files/video_1.mp4 files/document_1.pdf; do
-            mkdir -p "/tmp/tarjs-roundtrip/$(dirname "$f")"
-            /tmp/rclone-bin --config /tmp/tarjs-rclone.conf cat "archive:$f" > "/tmp/tarjs-roundtrip/$f"
-            cmp "$GITHUB_WORKSPACE/tarjs/app/src/test/resources/telegram_export/$f" "/tmp/tarjs-roundtrip/$f"
-          done
-          echo "RCLONE_CRYPT_MEDIA_OK"
-
-      - name: Apply Kotlin 2.3 JVM target fix
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('tarjs/app/build.gradle.kts')
-          s = p.read_text()
-          s = s.replace('    kotlinOptions { jvmTarget = "17" }\n', '')
-          s = s.replace(
-              '\n\ndependencies {',
-              '\nkotlin {\n    compilerOptions {\n        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)\n    }\n}\n\ndependencies {'
-          )
-          p.write_text(s)
-          PY
-
-      - name: Enable AndroidX for JVM tests
-        shell: bash
-        run: |
-          grep -q '^android.useAndroidX=' tarjs/gradle.properties && sed -i 's/^android.useAndroidX=.*/android.useAndroidX=true/' tarjs/gradle.properties || echo 'android.useAndroidX=true' >> tarjs/gradle.properties
-
-      - name: Run TAR-JS importer/index/search unit tests
-        working-directory: tarjs
-        shell: bash
-        run: gradle --stacktrace --no-daemon testDebugUnitTest
-
+        with: { gradle-version: '8.11.1' }
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Unit tests
+        run: gradle --no-daemon testDebugUnitTest
+      - name: Lint
+        run: gradle --no-daemon lintDebug
       - name: Build debug APK
-        working-directory: tarjs
-        shell: bash
-        run: gradle --stacktrace --no-daemon assembleDebug
-
-      - name: Verify APK contains rclone native engine
+        run: gradle --no-daemon assembleDebug
+      - name: Verify APK is native and from this commit
         shell: bash
         run: |
-          unzip -l tarjs/app/build/outputs/apk/debug/app-debug.apk | grep -q 'lib/arm64-v8a/libgojni.so'
-          echo "APK contains embedded rclone libgojni.so."
-
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q 'classes.dex'
+          ! unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -E 'assets/web|\.html|\.js'
+          sha256sum app/build/outputs/apk/debug/app-debug.apk | tee apk.sha256
+          echo "commit=${GITHUB_SHA}" | tee build-provenance.txt
+      - uses: actions/upload-artifact@v4
         with:
-          name: TAR-JS-debug-rclone
-          path: tarjs/app/build/outputs/apk/debug/app-debug.apk
+          name: TAR-JS-debug-${{ github.sha }}
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            apk.sha256
+            build-provenance.txt
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30

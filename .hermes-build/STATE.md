@@ -1,11 +1,11 @@
 # TAR-JS Build State
 
-- Project status: READY_FOR_REVIEW / BLOCKED from COMPLETE
-- Current phase: Phase 2 — final integration audit
-- Current task: obtain rendered UI evidence and run mandatory Superpowers/Ponytail pre-ship gates
-- Last completed phase: Phase 1 — full PRD behavior verification
-- Last successful commit: d7f6918c5d6154d42dd83d32f3ff1041e0f57787 (state/gates)
-- Tests currently passing: GitHub PRD Full QA run 36732938633 on current HEAD; all workflow steps passed
-- Tests currently failing: none in GitHub PRD QA
-- Blockers: rendered Android UI/device verification unavailable; Superpowers/Ponytail final gates not run
-- Next allowed action: complete Phase 2 evidence; do not mark COMPLETE or create final commit until all mandatory gates pass
+- Project status: ACTIVE / Phase 0 implementation; not complete
+- Current phase: Phase 0 — reset/bootstrap/architecture
+- Current task: replace stale reconstruction pipeline with checked-in native Kotlin project and authoritative CI
+- Last completed phase: none in this rebuild
+- Last successful commit: none in this rebuild
+- Tests currently passing: not yet run in GitHub for this commit
+- Tests currently failing: local Android toolchain unavailable (Java/Gradle not installed)
+- Blockers: destructive deletion approval was unavailable for removing legacy files; device rendering unavailable; rclone/foreground/media implementation incomplete
+- Next allowed action: finish Phase 0 cleanup and run GitHub gate; do not advance on local assumptions

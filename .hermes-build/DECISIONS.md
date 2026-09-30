@@ -1,6 +1,7 @@
 # Decisions
 
-- Use GitHub Actions as the build authority; do not substitute a local Android build.
-- Treat `build-tarjs-prd.yml` as the broad acceptance workflow because it exercises architecture contracts, UI navigation harness, rclone architecture, importer tests, full JVM regression tests, APK content, and artifact upload.
-- Keep the existing source-reconstruction pipeline intact until current-HEAD evidence proves it inadequate.
-- Do not report success from the older build-debug run alone; it does not prove every PRD function.
+- Rebuild uses 100% Kotlin app source, native Jetpack Compose, and Material 3. No WebView/JavaScript primary UI.
+- GitHub Actions is authoritative because local Java/Gradle is unavailable.
+- APK provenance must include checked-out commit, artifact name, SHA-256, and APK contents.
+- Requirements are not marked complete from source inspection; rendered/device and integration checks remain UNVERIFIED until evidence exists.
+- Legacy artifacts are not reusable unless explicitly revalidated against the master PRD.

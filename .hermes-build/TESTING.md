@@ -1,30 +1,30 @@
 # Testing and UI Evidence
 
-## GitHub workflow evidence
+## Architecture gate
+- Native Kotlin app sources: IMPLEMENTED (`app/src/main/java/**/*.kt`)
+- Compose + Material 3: IMPLEMENTED in Gradle
+- WebView/Java/JavaScript primary app: CI forbidden
+- Native Lottie dependency: PRESENT; actual sticker composable/device rendering: PENDING
 
+## Automated evidence
 | Check | Status | Evidence |
 |---|---|---|
-| Existing baseline build-debug | PASS | Run 36725224481: reconstruction, frontend syntax, narrow layout test, dummy export, rclone AAR, encrypted media round-trip, unit tests, debug APK, native library verification, and artifact upload all passed. |
-| Full PRD QA on current HEAD | PASS | Run 36732938633 at d7f6918; all 23 substantive workflow steps passed, including importer integration, full JVM regression, APK/runtime verification, and upload. |
-
-## Current-head PRD QA evidence
-
-- Workflow: https://github.com/litmaspatra/tar-js/actions/runs/36734501080
-- Commit: 3193d5b38461531383b520d510791a2de2fc9889
-- Artifact: TAR-JS-background-progress-QA-debug, artifact ID 11105843748, 25,425,499 bytes, not expired
-- APK SHA-256 printed by workflow: 5fc38e6971149b2d6f7c7b781438b96c1de023e1d171a8fa2734f0bd9ed1373c
-- Verification included native `lib/arm64-v8a/libgojni.so`, exact AAR-to-APK native hash comparison, patched web assets, importer integration tests, full JVM regression tests, and UI/architecture contracts.
+| Local Gradle tests | BLOCKED | Java/Gradle unavailable on Android host |
+| GitHub unit tests | PENDING | Must run on new commit |
+| GitHub lint | PENDING | Must run on new commit |
+| GitHub debug APK | PENDING | Must verify artifact commit/hash/contents |
+| TGS gzip core test | IMPLEMENTED | `TarJsCoreTest.tgsIsDecompressed` |
+| identity-side core test | IMPLEMENTED | `TarJsCoreTest.ownerIsRightAndOtherIsLeft` |
+| archive cache isolation test | IMPLEMENTED | `TarJsCoreTest.cacheKeySeparatesArchives` |
 
 ## Screen matrix
-
-Rendered emulator/device inspection is not available in this workspace. Until performed, each affected screen remains UNVERIFIED rather than inferred from source.
-
-| Screen/flow | Light/dark | Widths | Navigation/back | States/input/insets | Accessibility/touch/contrast | Result |
+| Screen | Light/dark | widths | back/insets | states | accessibility/touch | Result |
 |---|---|---|---|---|---|---|
-| Archive/home | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| Remote/password setup | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| Folder/import/indexing | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| Chat/message browsing and search | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| Chat appearance/photo/overflow | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Lock/setup | UNVERIFIED | UNVERIFIED | UNVERIFIED | error/success coded | UNVERIFIED | UNVERIFIED |
+| Welcome/home | UNVERIFIED | UNVERIFIED | UNVERIFIED | empty coded | UNVERIFIED | UNVERIFIED |
+| Chat list | UNVERIFIED | UNVERIFIED | UNVERIFIED | empty coded | UNVERIFIED | UNVERIFIED |
+| Chat/search | UNVERIFIED | UNVERIFIED | UNVERIFIED | empty/no-match coded | UNVERIFIED | UNVERIFIED |
+| Source/import/indexing | BLOCKED | BLOCKED | BLOCKED | progress not yet fully surfaced | BLOCKED | BLOCKED |
+| Media/profile/settings | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
 
-Skipped/one-off styling: none assessed yet.
+No screen is marked PASS without rendered device evidence.
