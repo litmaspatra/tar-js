@@ -1,0 +1,9 @@
+{
+  "personal_information": {"user_information": {"user_id": "owner-42"}},
+  "id": 1002,
+  "name": "Single Chat",
+  "messages": [
+    {"id": 8, "date": "2026-01-02T00:00:00", "from": "Owner", "from_id": "owner-42", "text": "single-chat old-result search token"},
+    {"id": 9, "date": "2026-01-03T00:00:00", "from": "Receiver", "from_id": "receiver-7", "text": "newer result"}
+  ]
+}

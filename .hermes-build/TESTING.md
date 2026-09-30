@@ -18,6 +18,7 @@
 | identity-side core test | IMPLEMENTED | `TarJsCoreTest.ownerIsRightAndOtherIsLeft` |
 | Rclone encrypted-config wrong-password retry | PASS (CI-covered) | `ci/rclone_reset_test.go`; wrong unlock cannot dump, correct retry dumps both remotes |
 | Local B2/crypt/rclone contract | PASS (host-verified; CI job added) | `.github/workflows/build-debug.yml` `phase2-local-contract`; local filesystem object-store double, encrypted crypt paths, listremotes/listing/nested result/media copy/cat/delete |
+| Expanded deterministic fixture matrix | PASS (host fixture validation; CI pending) | `.hermes-build/PHASE2-DUMMY-MATRIX.md`; configs, full/single result archives, rich/reply/forward/edited/service messages, seven media representations |
 | Real B2 integration | BLOCKED | `phase2-crypt-b2` requires intentionally absent `B2_ACCOUNT_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET`; local contract is not equivalent |
 | SAF recursive result.json instrumentation fixture | IMPLEMENTED (CI job added; run pending) | `FixtureDocumentsProvider` + `SafArchiveSourceInstrumentedTest`, 5s test timeout |
 | SAF emulator/device gate | BLOCKED pending CI run | emulator invocation now uses no-window/no-audio/no-boot-anim, disabled animations, and a 15m bounded Gradle timeout |

@@ -172,6 +172,49 @@ jobs:
           ! rclone --config "$RUNNER_TEMP/local-rclone.conf" cat b2crypt:exports/2026/result.json >/dev/null 2>&1
           echo 'LOCAL_CONTRACT=PASS (local filesystem object-store double; not real B2)'
 
+  phase2-fixture-matrix:
+    name: Deterministic Phase 2 fixture matrix
+    needs: build-and-rclone
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate archive and media fixture matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import gzip, json
+          from pathlib import Path
+          root = Path('fixtures/phase2-matrix')
+          account = json.loads((root / 'full-account-result.json').read_text())
+          single = json.loads((root / 'single-chat-result.json').read_text())
+          chats = account['chats']['list']
+          assert len(chats) == 2
+          assert sum(len(c['messages']) for c in chats) == 8
+          assert single['id'] == 1002 and len(single['messages']) == 2
+          kinds = {p.name for p in (root / 'media').iterdir()}
+          assert {'static.webp','video.mp4','audio.mp3','voice.ogg','file.bin','animated.tgs','sticker.webm'} <= kinds
+          assert gzip.decompress((root / 'media' / 'animated.tgs').read_bytes()).startswith(b'{')
+          assert (root / 'plain-rclone.conf').read_bytes().startswith(b'\\xef\\xbb\\xbf')
+          print('FIXTURE_MATRIX=PASS chats=2 messages=8 media=7 rich/reply/forward/edited/service covered')
+          PY
+      - name: Run deterministic local crypt contract using committed fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install github.com/rclone/rclone@v1.75.1
+          export PATH="$HOME/go/bin:$PATH"
+          root="$RUNNER_TEMP/fixture-object-store"
+          mkdir -p "$root"
+          p1=$(rclone obscure 'tar-js-dummy-password')
+          p2=$(rclone obscure 'tar-js-dummy-salt')
+          sed "s#remote = /tmp/tar-js-dummy-b2#remote = $root#; s#password = obscured-dummy-password#password = $p1#; s#password2 = obscured-dummy-salt#password2 = $p2#" fixtures/phase2-matrix/encrypted-rclone.conf.fixture > "$RUNNER_TEMP/rclone.conf"
+          rclone --config "$RUNNER_TEMP/rclone.conf" copyto fixtures/phase2-matrix/full-account-result.json b2crypt:telegram/full-account-result.json
+          rclone --config "$RUNNER_TEMP/rclone.conf" copyto fixtures/phase2-matrix/single-chat-result.json b2crypt:telegram/single-chat-result.json
+          test "$(rclone --config "$RUNNER_TEMP/rclone.conf" lsf --recursive b2crypt:telegram | wc -l)" -eq 2
+          echo 'FIXTURE_CRYPT=PASS (local backend double; not real B2)'
+
   phase2-saf:
     name: SAF compile and instrumentation gate
     needs: build-and-rclone

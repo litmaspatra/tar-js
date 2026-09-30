@@ -1,0 +1,11 @@
+# deterministic encrypted-config fixture; values are non-production rclone-obscured dummies
+[dummyb2]
+type = local
+remote = /tmp/tar-js-dummy-b2
+[b2crypt]
+type = crypt
+remote = dummyb2:telegram
+password = obscured-dummy-password
+password2 = obscured-dummy-salt
+filename_encryption = standard
+directory_name_encryption = true
