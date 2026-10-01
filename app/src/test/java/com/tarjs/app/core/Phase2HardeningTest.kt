@@ -2,15 +2,14 @@ package com.tarjs.app.core
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.GZIPOutputStream
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
-import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -74,7 +73,7 @@ class Phase2HardeningTest {
         """.trimIndent()
         db.importJson(export) { _, _ -> }
         val search = ChatSearch(db)
-        val stateDeferred = kotlinx.coroutines.async(StandardTestDispatcher(testScheduler)) { search.search(10, "needle", this) }
+        val stateDeferred = async(StandardTestDispatcher(testScheduler)) { search.search(10, "needle", this) }
         advanceTimeBy(ChatSearch.DEBOUNCE_MS + 1)
         val state = stateDeferred.await()
         assertNull(state.error)
