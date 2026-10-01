@@ -107,7 +107,8 @@ fun TarApp(vm: TarVm = viewModel()) {
 
 @Composable
 private fun WelcomeScreen(vm: TarVm) {
-    BackHandler { (LocalContext.current as? Activity)?.finish() }
+    val context = LocalContext.current
+    BackHandler { (context as? Activity)?.finish() }
     Box(Modifier.fillMaxSize().padding(WindowInsets.safeDrawing.asPaddingValues()), contentAlignment = Alignment.Center) {
         Column(Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.primaryContainer) {
