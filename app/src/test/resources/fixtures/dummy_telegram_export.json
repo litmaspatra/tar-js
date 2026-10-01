@@ -1,0 +1,82 @@
+{
+  "personal_information": {
+    "user_id": "user_owner",
+    "first_name": "Kartik"
+  },
+  "chats": {
+    "list": [
+      {
+        "id": 100,
+        "name": "Alice",
+        "type": "personal_chat",
+        "messages": [
+          {
+            "id": 1,
+            "type": "message",
+            "from": "Alice",
+            "from_id": "user_alice",
+            "date": "2026-01-01T00:00:10+00:00",
+            "date_unixtime": 10,
+            "text": "hello owner"
+          },
+          {
+            "id": 2,
+            "type": "message",
+            "from": "Kartik",
+            "from_id": "user_owner",
+            "date": "2026-01-01T00:00:20+00:00",
+            "date_unixtime": 20,
+            "text": [
+              "rich ",
+              {"type": "bold", "text": "text"},
+              " array"
+            ]
+          },
+          {
+            "id": 3,
+            "type": "message",
+            "from": "Alice",
+            "from_id": "user_alice",
+            "date": "2026-01-01T00:00:30+00:00",
+            "date_unixtime": 30,
+            "text": "middle"
+          },
+          {
+            "id": 4,
+            "type": "message",
+            "from": "Kartik",
+            "from_id": "user_owner",
+            "date": "2026-01-01T00:00:40+00:00",
+            "date_unixtime": 40,
+            "text": "newest"
+          }
+        ]
+      },
+      {
+        "id": 200,
+        "name": "Dummy Group",
+        "type": "private_group",
+        "messages": [
+          {
+            "id": 1,
+            "type": "message",
+            "from": "Bob",
+            "from_id": "user_bob",
+            "date": "2026-01-01T00:00:50+00:00",
+            "date_unixtime": 50,
+            "text": "group message"
+          },
+          {
+            "id": 2,
+            "type": "message",
+            "from": "Kartik",
+            "from_id": "user_owner",
+            "date": "2026-01-01T00:01:00+00:00",
+            "date_unixtime": 60,
+            "text": "owner group reply"
+          }
+        ]
+      }
+    ]
+  }
+}
