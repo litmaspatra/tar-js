@@ -255,7 +255,7 @@ jobs:
           emulator-boot-timeout: 1200
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             adb wait-for-device
             timeout 180s bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\\r")" = "1" ]; do sleep 2; done'
             adb shell settings put global window_animation_scale 0
