@@ -2,7 +2,7 @@ name: TAR-JS Phase 2 strict gates
 
 on:
   push:
-    branches: [main]
+    branches: [main, review/phase2-hardening]
   workflow_dispatch:
 
 permissions:
