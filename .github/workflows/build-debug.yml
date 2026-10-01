@@ -248,11 +248,11 @@ jobs:
           arch: x86_64
           target: google_apis
           force-avd-creation: true
-          cores: 2
-          ram-size: 2048M
-          disk-size: 4096M
+          cores: 1
+          ram-size: 1536M
+          disk-size: 2048M
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -no-snapshot-save -gpu off -accel off
-          emulator-boot-timeout: 900
+          emulator-boot-timeout: 1200
           disable-animations: true
           script: |
             set -euo pipefail
