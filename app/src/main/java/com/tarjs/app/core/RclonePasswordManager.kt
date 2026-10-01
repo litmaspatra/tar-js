@@ -105,19 +105,19 @@ object RcloneRuntime {
     private fun initialize() {
         if (initialized) return
         val cls = Class.forName(CLASS_NAME)
-        cls.methods.firstOrNull { it.name == "rcloneInitialize" && it.parameterCount == 0 }
+        cls.methods.firstOrNull { it.name.equals("rcloneInitialize", ignoreCase = true) && it.parameterCount == 0 }
             ?.invoke(null) ?: error("Embedded rclone initialize API is unavailable")
         initialized = true
     }
 
     private fun invokeOptionalNoArg(name: String) {
         val cls = Class.forName(CLASS_NAME)
-        cls.methods.firstOrNull { it.name == name && it.parameterCount == 0 }?.invoke(null)
+        cls.methods.firstOrNull { it.name.equals(name, ignoreCase = true) && it.parameterCount == 0 }?.invoke(null)
     }
 
     private fun rpcChecked(method: String, params: JSONObject): JSONObject {
         val cls = Class.forName(CLASS_NAME)
-        val rpc = cls.methods.firstOrNull { it.name == "rcloneRPC" && it.parameterCount == 2 }
+        val rpc = cls.methods.firstOrNull { it.name.equals("rcloneRPC", ignoreCase = true) && it.parameterCount == 2 }
             ?: error("Embedded rclone RPC API is unavailable")
         val raw = rpc.invoke(null, method, params.toString())
         val output = extractOutput(raw)
@@ -133,9 +133,9 @@ object RcloneRuntime {
         if (raw == null) return ""
         if (raw is String) return raw
         val cls = raw.javaClass
-        val getter = cls.methods.firstOrNull { it.parameterCount == 0 && (it.name == "getOutput" || it.name == "output") }
+        val getter = cls.methods.firstOrNull { it.parameterCount == 0 && (it.name.equals("getOutput", true) || it.name.equals("output", true)) }
         if (getter != null) return getter.invoke(raw)?.toString().orEmpty()
-        val field = runCatching { cls.getField("output") }.getOrNull()
+        val field = cls.fields.firstOrNull { it.name.equals("output", ignoreCase = true) }
         if (field != null) return field.get(raw)?.toString().orEmpty()
         return raw.toString()
     }
@@ -143,8 +143,9 @@ object RcloneRuntime {
     private fun extractStatus(raw: Any?): Int? {
         if (raw == null || raw is String) return null
         val cls = raw.javaClass
-        val getter = cls.methods.firstOrNull { it.parameterCount == 0 && (it.name == "getStatus" || it.name == "status") }
-        val value = getter?.invoke(raw) ?: runCatching { cls.getField("status").get(raw) }.getOrNull()
+        val getter = cls.methods.firstOrNull { it.parameterCount == 0 && (it.name.equals("getStatus", true) || it.name.equals("status", true)) }
+        val field = cls.fields.firstOrNull { it.name.equals("status", ignoreCase = true) }
+        val value = getter?.invoke(raw) ?: field?.get(raw)
         return (value as? Number)?.toInt() ?: value?.toString()?.toIntOrNull()
     }
 
