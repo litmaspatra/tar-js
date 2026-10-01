@@ -232,7 +232,8 @@ jobs:
       - name: Install Android SDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools' 'emulator' 'system-images;android-35;google_apis;x86_64'
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-34' 'build-tools;35.0.0' 'platform-tools' 'emulator' 'system-images;android-34;google_apis;x86_64'
+          echo "ANDROID_SERIAL=emulator-5554" >> "$GITHUB_ENV"
       - name: Restore real gomobile AAR
         uses: actions/download-artifact@v4
         with:
@@ -240,13 +241,24 @@ jobs:
           path: phase2-artifact
       - name: Install AAR input
         run: mkdir -p app/libs && find phase2-artifact -name gomobile.aar -type f -exec cp {} app/libs/gomobile.aar \; && test -s app/libs/gomobile.aar
-      - name: Compile and run SAF instrumentation tests on emulator
+      - name: Compile and run bounded SAF instrumentation tests on software emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
-          emulator-boot-timeout: 1200
+          force-avd-creation: true
+          cores: 2
+          ram-size: 2048M
+          disk-size: 4096M
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -no-snapshot-save -gpu off -accel off
+          emulator-boot-timeout: 900
           disable-animations: true
-          script: timeout 15m gradle --no-daemon testDebugUnitTest connectedDebugAndroidTest
+          script: |
+            set -euo pipefail
+            adb wait-for-device
+            timeout 180s bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\\r")" = "1" ]; do sleep 2; done'
+            adb shell settings put global window_animation_scale 0
+            adb shell settings put global transition_animation_scale 0
+            adb shell settings put global animator_duration_scale 0
+            timeout 12m gradle --no-daemon testDebugUnitTest connectedDebugAndroidTest
