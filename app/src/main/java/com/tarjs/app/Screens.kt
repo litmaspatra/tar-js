@@ -472,8 +472,9 @@ private fun ProfilePhotoScreen(vm: TarVm, onPickAnother: () -> Unit) {
     val chat = vm.selectedChat ?: return
     val context = LocalContext.current
     val uri = vm.pendingAvatarUri
-    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, uri) {
-        value = if (uri == null) null else withContext(Dispatchers.IO) { decodeBitmap(context, uri)?.asImageBitmap() }
+    var bitmap by remember(uri) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(uri) {
+        bitmap = if (uri == null) null else withContext(Dispatchers.IO) { decodeBitmap(context, uri)?.asImageBitmap() }
     }
     BackHandler { vm.navigateTo(NavigationScreen.Chat) }
     Scaffold(
@@ -547,8 +548,9 @@ private fun ChatAvatar(vm: TarVm, chat: Chat, size: androidx.compose.ui.unit.Dp)
     val context = LocalContext.current
     val pref = remember(chat.id, chat.title) { vm.avatarPreference(chat.id) }
     val file = pref?.imagePath?.let { File(context.filesDir, it) }
-    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, file?.absolutePath, file?.lastModified()) {
-        value = if (file?.isFile == true) withContext(Dispatchers.IO) { BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap() } else null
+    var bitmap by remember(file?.absolutePath, file?.lastModified()) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(file?.absolutePath, file?.lastModified()) {
+        bitmap = if (file?.isFile == true) withContext(Dispatchers.IO) { BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap() } else null
     }
     Box(Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
         if (bitmap != null) {
