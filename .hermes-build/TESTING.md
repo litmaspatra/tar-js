@@ -21,7 +21,7 @@
 | Expanded deterministic fixture matrix | PASS (host fixture validation; CI pending) | `.hermes-build/PHASE2-DUMMY-MATRIX.md`; configs, full/single result archives, rich/reply/forward/edited/service messages, seven media representations |
 | Real B2 integration | BLOCKED | `phase2-crypt-b2` requires intentionally absent `B2_ACCOUNT_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET`; local contract is not equivalent |
 | SAF recursive result.json instrumentation fixture | IMPLEMENTED (CI job added; run pending) | `FixtureDocumentsProvider` + `SafArchiveSourceInstrumentedTest`, 5s test timeout |
-| SAF emulator/device gate | BLOCKED pending CI run | emulator invocation now uses no-window/no-audio/no-boot-anim, disabled animations, and a 15m bounded Gradle timeout |
+| SAF emulator/device gate | BLOCKED (run 36755428362) | Emulator never reached `sys.boot_completed`; action ended `Timeout waiting for emulator to boot` after default 600s before Gradle tests; targeted retry raises boot timeout to 1200s |
 
 ## Screen matrix
 | Screen | Light/dark | widths | back/insets | states | accessibility/touch | Result |
