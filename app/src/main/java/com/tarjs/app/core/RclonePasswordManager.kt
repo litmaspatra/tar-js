@@ -56,10 +56,10 @@ object RcloneRuntime {
         initialize()
         invokeOptionalNoArg("rcloneResetConfig")
         rpcChecked("options/set", JSONObject().put("main", JSONObject().put("AskPassword", false)))
+        rpcChecked("config/setpath", JSONObject().put("path", config.absolutePath))
         if (!password.isNullOrEmpty()) {
             rpcChecked("config/unlock", JSONObject().put("configPassword", password))
         }
-        rpcChecked("config/setpath", JSONObject().put("path", config.absolutePath))
         rpcChecked("config/listremotes", JSONObject())
     }
 
