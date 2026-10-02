@@ -51,6 +51,15 @@ object RcloneRuntime {
     private val lock = Any()
     @Volatile private var initialized = false
 
+    /**
+     * Unlock and validate the selected private config.
+     *
+     * Important: rclone's config/unlock RPC can return HTTP 200 even for a
+     * wrong password. The upstream regression harness therefore validates the
+     * unlock by reading config/dump. Keep the Android runtime on that exact
+     * sequence instead of treating config/unlock/listremotes as password
+     * validation.
+     */
     fun unlock(config: File, password: String?) = synchronized(lock) {
         require(config.isFile) { "Private rclone config is missing" }
         initialize()
@@ -60,7 +69,9 @@ object RcloneRuntime {
         if (!password.isNullOrEmpty()) {
             rpcChecked("config/unlock", JSONObject().put("configPassword", password))
         }
-        rpcChecked("config/listremotes", JSONObject())
+        // config/dump actually forces rclone to decrypt/read the config and is
+        // the same correctness check used by ci/rclone_reset_test.go.
+        rpcChecked("config/dump", JSONObject())
     }
 
     fun listRemotes(): List<String> = synchronized(lock) {
