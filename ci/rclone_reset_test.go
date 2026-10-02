@@ -44,4 +44,10 @@ func TestRcloneResetEncryptedConfig(t *testing.T) {
     if err := json.Unmarshal([]byte(out), &dump); err != nil { t.Fatal(err) }
     if _, ok := dump["b2remote"]; !ok { t.Fatalf("b2remote missing: %s", out) }
     if _, ok := dump["b2crypt"]; !ok { t.Fatalf("b2crypt missing: %s", out) }
+
+    remotesOut, status := rpcStatus("config/listremotes", map[string]any{})
+    if status != 200 { t.Fatalf("listremotes failed after verified unlock: %s", remotesOut) }
+    var remotes struct { Remotes []string `json:"remotes"` }
+    if err := json.Unmarshal([]byte(remotesOut), &remotes); err != nil { t.Fatal(err) }
+    if len(remotes.Remotes) != 2 { t.Fatalf("expected 2 remotes after unlock, got %d: %s", len(remotes.Remotes), remotesOut) }
 }
