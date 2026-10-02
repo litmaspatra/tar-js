@@ -54,17 +54,17 @@ object RcloneRuntime {
     /**
      * Unlock and validate the selected private config.
      *
-     * Select the imported config before sending its password. On Android,
-     * rclone cannot discover a home/config directory and otherwise attempts
-     * to unlock its fallback config instead of the selected private file.
+     * Select the imported config and install file-backed storage before
+     * sending its password. Android may initialize rclone without a home
+     * directory, leaving it in memory-only mode until the bridge prepares the
+     * private config.
      * A dump after unlock forces a real read and rejects wrong passwords.
      */
     fun unlock(config: File, password: String?) = synchronized(lock) {
         require(config.isFile) { "Private rclone config is missing" }
         initialize()
-        invokeOptionalNoArg("rcloneResetConfig")
+        invokeRequiredString("rclonePrepareConfig", config.absolutePath)
         rpcChecked("options/set", JSONObject().put("main", JSONObject().put("AskPassword", false)))
-        rpcChecked("config/setpath", JSONObject().put("path", config.absolutePath))
         if (!password.isNullOrEmpty()) {
             rpcChecked("config/unlock", JSONObject().put("configPassword", password))
         }
@@ -121,9 +121,13 @@ object RcloneRuntime {
         initialized = true
     }
 
-    private fun invokeOptionalNoArg(name: String) {
+    private fun invokeRequiredString(name: String, value: String) {
         val cls = Class.forName(CLASS_NAME)
-        cls.methods.firstOrNull { it.name.equals(name, ignoreCase = true) && it.parameterCount == 0 }?.invoke(null)
+        val method = cls.methods.firstOrNull {
+            it.name.equals(name, ignoreCase = true) &&
+                it.parameterTypes.contentEquals(arrayOf(String::class.java))
+        } ?: error("Embedded rclone config preparation API is unavailable")
+        method.invoke(null, value)
     }
 
     private fun rpcChecked(method: String, params: JSONObject): JSONObject {

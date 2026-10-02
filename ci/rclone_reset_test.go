@@ -8,6 +8,7 @@ import (
     "testing"
 
     "github.com/rclone/rclone/fs/config"
+    "github.com/rclone/rclone/fs/config/configfile"
 )
 
 func rpcStatus(method string, input any) (string, int) {
@@ -28,15 +29,18 @@ func TestRcloneResetEncryptedConfig(t *testing.T) {
     if err := f.Close(); err != nil { t.Fatal(err) }
     config.ClearConfigPassword()
 
-    RcloneResetConfig()
+    // Reproduce Android initialization without a discoverable home/config
+    // directory. Installing storage while the path is empty is intentionally a
+    // no-op in rclone, so the bridge must set the path before installing it.
+    if err := config.SetConfigPath(""); err != nil { t.Fatal(err) }
+    configfile.Install()
+    if err := RclonePrepareConfig(path); err != nil { t.Fatal(err) }
     if _, status := rpcStatus("options/set", map[string]any{"main": map[string]any{"AskPassword": false}}); status != 200 { t.Fatalf("options/set status=%d", status) }
-    if _, status := rpcStatus("config/setpath", map[string]any{"path": path}); status != 200 { t.Fatalf("setpath status=%d", status) }
     if _, status := rpcStatus("config/unlock", map[string]any{"configPassword": "wrong-password"}); status != 200 { t.Fatalf("wrong unlock request status=%d", status) }
     if _, status := rpcStatus("config/dump", map[string]any{}); status == 200 { t.Fatal("wrong password unexpectedly unlocked config") }
 
-    RcloneResetConfig()
+    if err := RclonePrepareConfig(path); err != nil { t.Fatal(err) }
     if _, status := rpcStatus("options/set", map[string]any{"main": map[string]any{"AskPassword": false}}); status != 200 { t.Fatalf("options/set status=%d", status) }
-    if _, status := rpcStatus("config/setpath", map[string]any{"path": path}); status != 200 { t.Fatalf("setpath status=%d", status) }
     if _, status := rpcStatus("config/unlock", map[string]any{"configPassword": "correct-password"}); status != 200 { t.Fatalf("correct unlock status=%d", status) }
     out, status := rpcStatus("config/dump", map[string]any{})
     if status != 200 { t.Fatalf("correct password failed: %s", out) }
