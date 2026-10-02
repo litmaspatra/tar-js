@@ -54,21 +54,20 @@ object RcloneRuntime {
     /**
      * Unlock and validate the selected private config.
      *
-     * For encrypted configs the password must be installed before setpath.
-     * This is the ordering used by the previously working Android/rclone path:
-     * setpath may cause rclone to read the selected config immediately, so
-     * setting the path first can leave the process in a failed decrypt state.
-     * A dump after setpath forces a real read and rejects wrong passwords.
+     * Select the imported config before sending its password. On Android,
+     * rclone cannot discover a home/config directory and otherwise attempts
+     * to unlock its fallback config instead of the selected private file.
+     * A dump after unlock forces a real read and rejects wrong passwords.
      */
     fun unlock(config: File, password: String?) = synchronized(lock) {
         require(config.isFile) { "Private rclone config is missing" }
         initialize()
         invokeOptionalNoArg("rcloneResetConfig")
         rpcChecked("options/set", JSONObject().put("main", JSONObject().put("AskPassword", false)))
+        rpcChecked("config/setpath", JSONObject().put("path", config.absolutePath))
         if (!password.isNullOrEmpty()) {
             rpcChecked("config/unlock", JSONObject().put("configPassword", password))
         }
-        rpcChecked("config/setpath", JSONObject().put("path", config.absolutePath))
         // Force rclone to decrypt/read the selected config now. Wrong passwords
         // must fail here rather than being accepted from the unlock RPC alone.
         val dump = rpcChecked("config/dump", JSONObject())
