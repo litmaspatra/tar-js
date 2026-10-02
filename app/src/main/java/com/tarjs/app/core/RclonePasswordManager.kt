@@ -54,24 +54,25 @@ object RcloneRuntime {
     /**
      * Unlock and validate the selected private config.
      *
-     * Important: rclone's config/unlock RPC can return HTTP 200 even for a
-     * wrong password. The upstream regression harness therefore validates the
-     * unlock by reading config/dump. Keep the Android runtime on that exact
-     * sequence instead of treating config/unlock/listremotes as password
-     * validation.
+     * For encrypted configs the password must be installed before setpath.
+     * This is the ordering used by the previously working Android/rclone path:
+     * setpath may cause rclone to read the selected config immediately, so
+     * setting the path first can leave the process in a failed decrypt state.
+     * A dump after setpath forces a real read and rejects wrong passwords.
      */
     fun unlock(config: File, password: String?) = synchronized(lock) {
         require(config.isFile) { "Private rclone config is missing" }
         initialize()
         invokeOptionalNoArg("rcloneResetConfig")
         rpcChecked("options/set", JSONObject().put("main", JSONObject().put("AskPassword", false)))
-        rpcChecked("config/setpath", JSONObject().put("path", config.absolutePath))
         if (!password.isNullOrEmpty()) {
             rpcChecked("config/unlock", JSONObject().put("configPassword", password))
         }
-        // config/dump actually forces rclone to decrypt/read the config and is
-        // the same correctness check used by ci/rclone_reset_test.go.
-        rpcChecked("config/dump", JSONObject())
+        rpcChecked("config/setpath", JSONObject().put("path", config.absolutePath))
+        // Force rclone to decrypt/read the selected config now. Wrong passwords
+        // must fail here rather than being accepted from the unlock RPC alone.
+        val dump = rpcChecked("config/dump", JSONObject())
+        require(dump.length() > 0) { "Config contains no remotes or could not be decrypted" }
     }
 
     fun listRemotes(): List<String> = synchronized(lock) {
