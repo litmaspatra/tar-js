@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -57,13 +58,14 @@ data class AvatarPreference(
  * and enforcing uniqueness on (chat_id, message_id), and adds per-chat UI
  * preferences plus media metadata needed by the native renderer.
  */
-class ArchiveDb(context: Context) : SQLiteOpenHelper(context, "tarjs_archive.db", null, 3) {
+class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : SQLiteOpenHelper(context, databaseName, null, 6) {
 
     override fun onCreate(db: SQLiteDatabase) {
         createChats(db)
         createMessages(db)
         createPreferences(db)
         createIndexes(db)
+        createSearchIndex(db)
     }
 
     private fun createChats(db: SQLiteDatabase) {
@@ -127,8 +129,22 @@ class ArchiveDb(context: Context) : SQLiteOpenHelper(context, "tarjs_archive.db"
 
     private fun createIndexes(db: SQLiteDatabase) {
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_messages_chat_date ON messages(chat_id, date_unix)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_messages_chat_search ON messages(chat_id, text)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_messages_reply ON messages(chat_id, reply_to_id)")
+    }
+
+    private fun createSearchIndex(db: SQLiteDatabase) {
+        db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts4(text, sender, file_name, tokenize=unicode61)")
+    }
+
+    private fun rebuildSearchIndex(db: SQLiteDatabase) {
+        db.beginTransaction()
+        try {
+            db.execSQL("DELETE FROM messages_fts")
+            db.execSQL("INSERT INTO messages_fts(docid,text,sender,file_name) SELECT row_id,text,sender,COALESCE(file_name,'') FROM messages")
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -180,6 +196,14 @@ class ArchiveDb(context: Context) : SQLiteOpenHelper(context, "tarjs_archive.db"
                 db.endTransaction()
             }
         }
+        if (oldVersion < 6) {
+            db.execSQL("DROP TRIGGER IF EXISTS messages_fts_insert")
+            db.execSQL("DROP TRIGGER IF EXISTS messages_fts_delete")
+            db.execSQL("DROP TRIGGER IF EXISTS messages_fts_update")
+            db.execSQL("DROP TABLE IF EXISTS messages_fts")
+            createSearchIndex(db)
+            db.execSQL("INSERT INTO messages_fts(docid,text,sender,file_name) SELECT row_id,text,sender,COALESCE(file_name,'') FROM messages")
+        }
     }
 
     fun chats(): List<Chat> = readableDatabase.rawQuery(
@@ -226,7 +250,21 @@ class ArchiveDb(context: Context) : SQLiteOpenHelper(context, "tarjs_archive.db"
 
     fun searchMessages(chatId: Long, query: String, limit: Int = 100): List<Message> {
         if (query.isBlank()) return emptyList()
-        return messages(chatId = chatId, query = query, limit = limit.coerceIn(1, 300))
+        val terms = query.trim().split(Regex("\\s+"))
+            .map { it.replace(Regex("[^\\p{L}\\p{N}_]"), "") }
+            .filter(String::isNotBlank)
+        if (terms.isEmpty()) return emptyList()
+        // FTS4 treats whitespace as an implicit AND. The explicit AND keyword is
+        // not enabled by every Android SQLite build and can be parsed as a token.
+        val match = terms.joinToString(" ") { "$it*" }
+        return runCatching {
+            queryMessages(
+                "SELECT ${messageColumns("m")} FROM messages m WHERE m.chat_id=? AND m.row_id IN (SELECT docid FROM messages_fts WHERE messages_fts MATCH ?) ORDER BY m.date_unix ASC,m.message_id ASC LIMIT ?",
+                listOf(chatId.toString(), match, limit.coerceIn(1, 300).toString())
+            )
+        }.getOrElse {
+            messages(chatId = chatId, query = query, limit = limit.coerceIn(1, 300))
+        }
     }
 
     fun messageDate(chatId: Long, messageId: Long): Long? = readableDatabase.rawQuery(
@@ -256,7 +294,11 @@ class ArchiveDb(context: Context) : SQLiteOpenHelper(context, "tarjs_archive.db"
 
     private fun exists(sql: String, args: Array<String>): Boolean = readableDatabase.rawQuery(sql, args).use { it.moveToFirst() }
 
-    private fun messageColumns(): String = "message_id,chat_id,sender,text,date,date_unix,mine,reply_to_id,is_forwarded,is_edited,is_service,media_path,media_type,file_name,mime_type,duration_seconds"
+    private fun messageColumns(alias: String? = null): String {
+        val prefix = alias?.let { "$it." }.orEmpty()
+        return listOf("message_id", "chat_id", "sender", "text", "date", "date_unix", "mine", "reply_to_id", "is_forwarded", "is_edited", "is_service", "media_path", "media_type", "file_name", "mime_type", "duration_seconds")
+            .joinToString(",") { prefix + it }
+    }
 
     private fun queryMessages(sql: String, args: List<String>): List<Message> = readableDatabase.rawQuery(sql, args.toTypedArray()).use { c ->
         buildList {
@@ -329,11 +371,137 @@ class ArchiveDb(context: Context) : SQLiteOpenHelper(context, "tarjs_archive.db"
     fun clear() = writableDatabase.apply {
         beginTransaction()
         try {
+            execSQL("DELETE FROM messages_fts")
             execSQL("DELETE FROM messages")
             execSQL("DELETE FROM chats")
             execSQL("DELETE FROM chat_preferences")
             setTransactionSuccessful()
         } finally { endTransaction() }
+    }
+
+    /** Stream a potentially multi-gigabyte Telegram export into bounded SQLite batches. */
+    fun importJson(
+        file: File,
+        stage: (message: String) -> Unit = {},
+        progress: (done: Int, total: Int) -> Unit
+    ): ImportResult {
+        stage("Reading archive")
+        val info = try {
+            TelegramArchiveStream.inspect(file)
+        } catch (e: Exception) {
+            return ImportResult(0, 0, null, "Invalid Telegram export: ${e.message}")
+        }
+
+        val db = writableDatabase
+        val insert = db.compileStatement(
+            """
+            INSERT OR IGNORE INTO messages(
+                message_id,chat_id,sender,text,date,date_unix,mine,
+                reply_to_id,is_forwarded,is_edited,is_service,
+                media_path,media_type,file_name,mime_type,duration_seconds
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """.trimIndent()
+        )
+        var processed = 0
+        var deduped = 0
+        var transactionOpen = false
+        var lastPreview = ""
+        var activeChat: TelegramChatInfo? = null
+
+        fun beginBatch() {
+            if (!transactionOpen) {
+                db.beginTransaction()
+                transactionOpen = true
+            }
+        }
+
+        fun commitBatch() {
+            if (!transactionOpen) return
+            db.setTransactionSuccessful()
+            db.endTransaction()
+            transactionOpen = false
+        }
+
+        fun bindNullableString(index: Int, value: String?) {
+            if (value == null) insert.bindNull(index) else insert.bindString(index, value)
+        }
+
+        fun bindNullableLong(index: Int, value: Long?) {
+            if (value == null) insert.bindNull(index) else insert.bindLong(index, value)
+        }
+
+        try {
+            stage("Indexing messages")
+            TelegramArchiveStream.stream(
+                file,
+                info,
+                onChatStart = { chat ->
+                    activeChat = chat
+                    lastPreview = ""
+                    beginBatch()
+                },
+                onMessage = { chat, message ->
+                    beginBatch()
+                    insert.clearBindings()
+                    insert.bindLong(1, message.id)
+                    insert.bindLong(2, chat.id)
+                    insert.bindString(3, message.senderName)
+                    insert.bindString(4, message.text)
+                    insert.bindString(5, message.date)
+                    insert.bindLong(6, message.dateUnix)
+                    val mine = when {
+                        info.ownerId != null -> message.senderId == info.ownerId
+                        info.ownerName != null -> message.senderName.equals(info.ownerName, ignoreCase = true)
+                        else -> message.senderName.equals(chat.title, ignoreCase = true)
+                    }
+                    insert.bindLong(7, if (mine) 1L else 0L)
+                    bindNullableLong(8, message.replyToId)
+                    insert.bindLong(9, if (message.isForwarded) 1L else 0L)
+                    insert.bindLong(10, if (message.isEdited) 1L else 0L)
+                    insert.bindLong(11, if (message.isService) 1L else 0L)
+                    bindNullableString(12, message.mediaPath)
+                    bindNullableString(13, message.mediaType)
+                    bindNullableString(14, message.fileName)
+                    bindNullableString(15, message.mimeType)
+                    bindNullableLong(16, message.durationSeconds)
+                    if (insert.executeInsert() == -1L) deduped++
+                    processed++
+                    if (message.text.isNotBlank()) lastPreview = message.text.take(100)
+                    else if (!message.fileName.isNullOrBlank()) lastPreview = message.fileName.take(100)
+
+                    if (processed % BATCH_SIZE == 0) commitBatch()
+                    if (processed == info.totalMessages || processed % PROGRESS_INTERVAL == 0) {
+                        progress(processed, info.totalMessages)
+                    }
+                },
+                onChatEnd = { chat ->
+                    beginBatch()
+                    db.execSQL(
+                        "INSERT OR REPLACE INTO chats(id,title,preview,count,is_group,owner,created_at) VALUES(?,?,?,?,?,?,?)",
+                        arrayOf(
+                            chat.id,
+                            chat.title,
+                            lastPreview,
+                            chat.messageCount,
+                            if (chat.type.contains("group", true) || chat.type.contains("channel", true)) 1 else 0,
+                            info.ownerId ?: info.ownerName.orEmpty(),
+                            System.currentTimeMillis()
+                        )
+                    )
+                    activeChat = null
+                }
+            )
+            commitBatch()
+            stage("Building search index")
+            rebuildSearchIndex(db)
+        } catch (e: Exception) {
+            if (transactionOpen) db.endTransaction()
+            return ImportResult(info.chats.size, processed, info.ownerId, "Import stopped in ${activeChat?.title ?: "archive"}: ${e.message}", deduped)
+        } finally {
+            insert.close()
+        }
+
+        return ImportResult(info.chats.size, processed, info.ownerId, deduped = deduped)
     }
 
     fun importJson(text: String, progress: (done: Int, total: Int) -> Unit): ImportResult {
@@ -417,6 +585,7 @@ class ArchiveDb(context: Context) : SQLiteOpenHelper(context, "tarjs_archive.db"
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        rebuildSearchIndex(db)
         if (totalMessages == 0) return ImportResult(chatsToProcess.size, 0, ownerId, "Telegram export contains no messages", deduped)
         return ImportResult(chatsToProcess.size, processed, ownerId, deduped = deduped)
     }
@@ -451,5 +620,10 @@ class ArchiveDb(context: Context) : SQLiteOpenHelper(context, "tarjs_archive.db"
             }
         }
         else -> ""
+    }
+
+    companion object {
+        private const val BATCH_SIZE = 5_000
+        private const val PROGRESS_INTERVAL = 1_000
     }
 }

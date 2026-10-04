@@ -116,8 +116,13 @@ object RcloneRuntime {
     private fun initialize() {
         if (initialized) return
         val cls = Class.forName(CLASS_NAME)
-        cls.methods.firstOrNull { it.name.equals("rcloneInitialize", ignoreCase = true) && it.parameterCount == 0 }
-            ?.invoke(null) ?: error("Embedded rclone initialize API is unavailable")
+        val initialize = cls.methods.firstOrNull {
+            it.name.equals("rcloneInitialize", ignoreCase = true) && it.parameterCount == 0
+        } ?: error("Embedded rclone initialize API is unavailable")
+        // A successfully invoked Java void method returns null. Keep method
+        // discovery separate from invocation so success is not mistaken for a
+        // missing API.
+        initialize.invoke(null)
         initialized = true
     }
 

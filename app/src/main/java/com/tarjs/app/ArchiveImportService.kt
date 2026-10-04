@@ -12,6 +12,8 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.tarjs.app.core.ArchiveDb
+import com.tarjs.app.core.RcloneRuntime
+import com.tarjs.app.core.SafArchiveSource
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -32,23 +34,59 @@ class ArchiveImportService : Service() {
             return START_NOT_STICKY
         }
         val snapshot = intent?.getStringExtra(EXTRA_SNAPSHOT)?.let(::File) ?: return START_NOT_STICKY
+        val remote = intent.getStringExtra(EXTRA_REMOTE)
+        val remoteFile = intent.getStringExtra(EXTRA_REMOTE_FILE)
         cancelled.set(false)
-        writeStatus(this, ImportStatus("indexing", 0, 0, "Preparing archive…", null))
-        startForeground(NOTIFICATION_ID, notification("Indexing Telegram archive", "Preparing…", 0, 0))
+        val needsDownload = remote != null && remoteFile != null
+        val initialStatus = if (needsDownload) {
+            ImportStatus("downloading", 0, 0, "Downloading result.json", null)
+        } else {
+            ImportStatus("indexing", 0, 0, "Reading archive", null)
+        }
+        writeStatus(this, initialStatus)
+        startForeground(NOTIFICATION_ID, notification("Preparing Telegram archive", initialStatus.message, 0, 0))
         executor.execute {
-            val db = ArchiveDb(applicationContext)
+            var db: ArchiveDb? = null
             try {
-                val text = snapshot.readText(Charsets.UTF_8)
-                val result = db.importJson(text) { done, total ->
+                if (needsDownload) {
                     if (cancelled.get()) throw InterruptedException("Import cancelled")
-                    writeStatus(this, ImportStatus("indexing", done, total, "$done / $total messages indexed", null))
-                    if (done == total || done % 5000 == 0) {
+                    snapshot.parentFile?.mkdirs()
+                    RcloneRuntime.copyToLocal(remote!!, remoteFile!!, snapshot)
+                    require(snapshot.isFile && snapshot.length() > 0L) { "Downloaded result.json is empty" }
+                    saveRcloneSource(intent, snapshot)
+                    writeStatus(this, ImportStatus("indexing", 0, 0, "Reading archive", null))
+                    getSystemService(NotificationManager::class.java).notify(
+                        NOTIFICATION_ID,
+                        notification("Indexing Telegram archive", "Reading archive", 0, 0)
+                    )
+                }
+                val archiveDb = ArchiveDb(applicationContext)
+                db = archiveDb
+                var latestDone = 0
+                var latestTotal = 0
+                val result = archiveDb.importJson(
+                    snapshot,
+                    progress = { done, total ->
+                        if (cancelled.get()) throw InterruptedException("Import cancelled")
+                        latestDone = done
+                        latestTotal = total
+                        writeStatus(this, ImportStatus("indexing", done, total, "$done / $total messages indexed", null))
+                        if (done == total || done % 5000 == 0) {
+                            getSystemService(NotificationManager::class.java).notify(
+                                NOTIFICATION_ID,
+                                notification("Indexing Telegram archive", "$done / $total messages", done, total)
+                            )
+                        }
+                    },
+                    stage = { message ->
+                        if (cancelled.get()) throw InterruptedException("Import cancelled")
+                        writeStatus(this, ImportStatus("indexing", latestDone, latestTotal, message, null))
                         getSystemService(NotificationManager::class.java).notify(
                             NOTIFICATION_ID,
-                            notification("Indexing Telegram archive", "$done / $total messages", done, total)
+                            notification("Indexing Telegram archive", message, latestDone, latestTotal)
                         )
                     }
-                }
+                )
                 if (result.error != null) error(result.error)
                 writeStatus(this, ImportStatus("complete", result.messages, result.messages, "Indexed ${result.messages} messages", null))
                 getSystemService(NotificationManager::class.java).notify(
@@ -59,7 +97,7 @@ class ArchiveImportService : Service() {
                 val message = if (cancelled.get()) "Indexing cancelled" else (e.message ?: "Indexing failed")
                 writeStatus(this, ImportStatus(if (cancelled.get()) "cancelled" else "error", 0, 0, message, message))
             } finally {
-                db.close()
+                db?.close()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf(startId)
             }
@@ -73,6 +111,22 @@ class ArchiveImportService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun saveRcloneSource(intent: Intent, snapshot: File) {
+        val id = intent.getStringExtra(EXTRA_SOURCE_ID) ?: return
+        val path = intent.getStringExtra(EXTRA_SOURCE_PATH) ?: return
+        val importedAt = intent.getLongExtra(EXTRA_IMPORTED_AT, System.currentTimeMillis())
+        SafArchiveSource.saveArchiveMetadata(
+            this,
+            SafArchiveSource.ArchiveSource(
+                id = id,
+                type = "rclone",
+                path = path,
+                resultJsonHash = "",
+                importedAt = importedAt
+            )
+        )
+    }
 
     private fun notification(title: String, text: String, done: Int, total: Int, complete: Boolean = false): Notification {
         val launch = PendingIntent.getActivity(
@@ -111,11 +165,34 @@ class ArchiveImportService : Service() {
         private const val COMPLETE_NOTIFICATION_ID = 4202
         private const val ACTION_CANCEL = "com.tarjs.app.CANCEL_IMPORT"
         private const val EXTRA_SNAPSHOT = "snapshot"
+        private const val EXTRA_REMOTE = "remote"
+        private const val EXTRA_REMOTE_FILE = "remoteFile"
+        private const val EXTRA_SOURCE_ID = "sourceId"
+        private const val EXTRA_SOURCE_PATH = "sourcePath"
+        private const val EXTRA_IMPORTED_AT = "importedAt"
         private const val PREFS = "import-status"
 
         fun start(context: Context, snapshot: File) {
             writeStatus(context, ImportStatus("indexing", 0, 0, "Preparing archive…", null))
             val intent = Intent(context, ArchiveImportService::class.java).putExtra(EXTRA_SNAPSHOT, snapshot.absolutePath)
+            ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun startRclone(
+            context: Context,
+            snapshot: File,
+            remote: String,
+            remoteFile: String,
+            source: SafArchiveSource.ArchiveSource
+        ) {
+            writeStatus(context, ImportStatus("downloading", 0, 0, "Downloading result.json", null))
+            val intent = Intent(context, ArchiveImportService::class.java)
+                .putExtra(EXTRA_SNAPSHOT, snapshot.absolutePath)
+                .putExtra(EXTRA_REMOTE, remote)
+                .putExtra(EXTRA_REMOTE_FILE, remoteFile)
+                .putExtra(EXTRA_SOURCE_ID, source.id)
+                .putExtra(EXTRA_SOURCE_PATH, source.path)
+                .putExtra(EXTRA_IMPORTED_AT, source.importedAt)
             ContextCompat.startForegroundService(context, intent)
         }
 
@@ -141,5 +218,5 @@ class ArchiveImportService : Service() {
 }
 
 data class ImportStatus(val phase: String, val done: Int, val total: Int, val message: String, val error: String?) {
-    val active: Boolean get() = phase == "indexing"
+    val active: Boolean get() = phase == "downloading" || phase == "indexing"
 }

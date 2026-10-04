@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import org.json.JSONObject
 import java.io.File
@@ -14,7 +15,6 @@ object SafArchiveSource {
 
     data class FoundArchive(
         val resultJsonUri: Uri,
-        val resultJsonText: String,
         val parentFolderUri: Uri,
         val archiveSize: Int = 0
     )
@@ -39,9 +39,7 @@ object SafArchiveSource {
     fun findResultJsonWithContext(context: Context, treeUri: Uri): FoundArchive? {
         val root = DocumentFile.fromTreeUri(context, treeUri) ?: return null
         val found = findWithParent(root) ?: return null
-        val text = openResultJson(context.contentResolver, found.first) ?: return null
-        if (validateTelegramExport(text).isFailure) return null
-        return FoundArchive(found.first, text, found.second, roughMessageCount(text))
+        return FoundArchive(found.first, found.second)
     }
 
     private fun findWithParent(folder: DocumentFile): Pair<Uri, Uri>? {
@@ -56,12 +54,12 @@ object SafArchiveSource {
     }
 
     fun snapshotResultJson(context: Context, sourceUri: Uri, archiveId: String): Result<File> = runCatching {
-        val text = openResultJson(context.contentResolver, sourceUri) ?: error("Unable to read result.json")
-        validateTelegramExport(text).getOrThrow()
         val dir = File(context.filesDir, "archives/$archiveId").also { it.mkdirs() }
         val target = File(dir, "result.json")
         val temp = File(dir, "result.json.importing")
-        temp.writeText(text, Charsets.UTF_8)
+        context.contentResolver.openInputStream(sourceUri)?.buffered(256 * 1024)?.use { source ->
+            temp.outputStream().buffered(256 * 1024).use { destination -> source.copyTo(destination, 256 * 1024) }
+        } ?: error("Unable to read result.json")
         if (target.exists()) target.delete()
         check(temp.renameTo(target) || runCatching { temp.copyTo(target, overwrite = true); temp.delete(); true }.getOrDefault(false)) {
             "Unable to create private result.json snapshot"
@@ -83,6 +81,10 @@ object SafArchiveSource {
         require(count > 0) { "Telegram export contains no messages" }
     }
 
+    fun validateTelegramExport(file: File): Result<Unit> = runCatching {
+        TelegramArchiveStream.inspect(file)
+    }.map { Unit }
+
     fun saveArchiveMetadata(context: Context, source: ArchiveSource) {
         val json = JSONObject()
             .put("id", source.id)
@@ -91,7 +93,41 @@ object SafArchiveSource {
             .put("resultJsonHash", source.resultJsonHash)
             .put("importedAt", source.importedAt)
         context.getSharedPreferences("archive-sources", Context.MODE_PRIVATE)
-            .edit().putString(source.id, json.toString()).apply()
+            .edit().putString(source.id, json.toString()).putString("current_id", source.id).apply()
+    }
+
+    fun currentArchiveSource(context: Context): ArchiveSource? {
+        val prefs = context.getSharedPreferences("archive-sources", Context.MODE_PRIVATE)
+        val currentId = prefs.getString("current_id", null)
+        val candidates = prefs.all.asSequence()
+            .filter { it.key != "current_id" && it.value is String }
+            .mapNotNull { (_, value) -> runCatching { JSONObject(value as String) }.getOrNull() }
+            .mapNotNull { json ->
+                val id = json.optString("id").takeIf(String::isNotBlank) ?: return@mapNotNull null
+                ArchiveSource(
+                    id = id,
+                    type = json.optString("type"),
+                    path = json.optString("path"),
+                    resultJsonHash = json.optString("resultJsonHash"),
+                    importedAt = json.optLong("importedAt")
+                )
+            }.toList()
+        return candidates.firstOrNull { it.id == currentId } ?: candidates.maxByOrNull { it.importedAt }
+    }
+
+    /** Resolve one archive-relative media path without copying the user's backup. */
+    fun resolveSafMediaUri(context: Context, source: ArchiveSource, relativePath: String): Uri? {
+        if (source.type == "rclone" || source.path.isBlank()) return null
+        val sourceUri = runCatching { Uri.parse(source.path) }.getOrNull() ?: return null
+        val documentId = runCatching { DocumentsContract.getDocumentId(sourceUri) }.getOrNull()
+            ?: runCatching { DocumentsContract.getTreeDocumentId(sourceUri) }.getOrNull()
+            ?: return null
+        val treeUri = DocumentsContract.buildTreeDocumentUri(sourceUri.authority, documentId)
+        var current = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+        val segments = relativePath.replace('\\', '/').split('/').filter(String::isNotBlank)
+        if (segments.isEmpty() || segments.any { it == "." || it == ".." }) return null
+        for (segment in segments) current = current.findFile(segment) ?: return null
+        return current.takeIf { it.isFile }?.uri
     }
 
     fun sha256(file: File): String {

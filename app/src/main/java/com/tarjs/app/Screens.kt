@@ -5,11 +5,15 @@ package com.tarjs.app
 import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
+import android.widget.MediaController
+import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +25,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -38,16 +43,23 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.airbnb.lottie.compose.LottieAnimation
+import com.airbnb.lottie.compose.LottieCompositionSpec
+import com.airbnb.lottie.compose.LottieConstants
+import com.airbnb.lottie.compose.rememberLottieComposition
 import com.tarjs.app.core.*
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -79,29 +91,53 @@ fun TarApp(vm: TarVm = viewModel()) {
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     LaunchedEffect(Unit) { if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
 
-    val isUnlocked = vm.lockState is LockState.UNLOCKED
+    val isUnlocked = vm.lockState == LockState.NOT_SET_UP || vm.lockState is LockState.UNLOCKED
     val effectiveScreen = when {
         isUnlocked -> vm.screen
         vm.screen == NavigationScreen.Welcome -> NavigationScreen.Welcome
         else -> NavigationScreen.Lock
     }
 
-    when (effectiveScreen) {
-        NavigationScreen.Welcome -> WelcomeScreen(vm)
-        NavigationScreen.Lock -> LockScreen(vm)
-        NavigationScreen.Home -> HomeScreen(vm)
-        NavigationScreen.SourcePicker -> SourcePickerScreen(
-            onLocal = { type -> vm.chooseSafSource(type); treePicker.launch(null) },
-            onRclone = { configPicker.launch(arrayOf("*/*")) },
-            onBack = vm::openHome
-        )
-        NavigationScreen.SafBrowser -> SafBrowserScreen(vm)
-        NavigationScreen.RcloneConfig -> RcloneConfigScreen(vm)
-        NavigationScreen.ImportProgress -> ImportProgressScreen(vm)
-        NavigationScreen.Chat -> ChatScreen(vm, onPickPhoto = { avatarPicker.launch(arrayOf("image/*")) })
-        NavigationScreen.ChatSearch -> ChatSearchScreen(vm)
-        NavigationScreen.ProfilePhoto -> ProfilePhotoScreen(vm, onPickAnother = { avatarPicker.launch(arrayOf("image/*")) })
-        NavigationScreen.Settings -> SettingsScreen(vm)
+    Box(Modifier.fillMaxSize()) {
+        when (effectiveScreen) {
+            NavigationScreen.Welcome -> WelcomeScreen(vm)
+            NavigationScreen.Lock -> LockScreen(vm)
+            NavigationScreen.Home -> HomeScreen(vm)
+            NavigationScreen.SourcePicker -> SourcePickerScreen(
+                onLocal = { type -> vm.chooseSafSource(type); treePicker.launch(null) },
+                onRclone = { configPicker.launch(arrayOf("*/*")) },
+                onBack = vm::openHome
+            )
+            NavigationScreen.SafBrowser -> SafBrowserScreen(vm)
+            NavigationScreen.RcloneConfig -> RcloneConfigScreen(vm)
+            NavigationScreen.ImportProgress -> ImportProgressScreen(vm)
+            NavigationScreen.Chat -> ChatScreen(vm, onPickPhoto = { avatarPicker.launch(arrayOf("image/*")) })
+            NavigationScreen.ChatSearch -> ChatSearchScreen(vm)
+            NavigationScreen.ProfilePhoto -> ProfilePhotoScreen(vm, onPickAnother = { avatarPicker.launch(arrayOf("image/*")) })
+            NavigationScreen.Settings -> SettingsScreen(vm)
+        }
+        if (vm.importPhase in setOf("downloading", "indexing") && effectiveScreen != NavigationScreen.ImportProgress) {
+            ImportStatusBanner(vm, Modifier.align(Alignment.BottomCenter))
+        }
+    }
+}
+
+@Composable
+private fun ImportStatusBanner(vm: TarVm, modifier: Modifier = Modifier) {
+    val progress = if (vm.importTotal > 0) vm.importProgress.toFloat() / vm.importTotal else 0f
+    Surface(modifier.fillMaxWidth().padding(12.dp), shape = RoundedCornerShape(16.dp), shadowElevation = 8.dp) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 3.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Indexing in background", fontWeight = FontWeight.Bold)
+                    Text(vm.importStatus.ifBlank { "Preparing archive…" }, style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = { vm.navigateTo(NavigationScreen.ImportProgress) }) { Text("View") }
+            }
+            if (vm.importTotal > 0) LinearProgressIndicator({ progress.coerceIn(0f, 1f) }, Modifier.fillMaxWidth().padding(top = 8.dp))
+        }
     }
 }
 
@@ -124,7 +160,7 @@ private fun WelcomeScreen(vm: TarVm) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(28.dp))
-            Button(onClick = vm::beginSetupOrUnlock, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = vm::openPasscodeSettings, modifier = Modifier.fillMaxWidth()) {
                 Text(if (vm.lockState == LockState.NOT_SET_UP) "Get started" else "Unlock TAR-JS")
             }
         }
@@ -141,34 +177,43 @@ private fun LockScreen(vm: TarVm) {
     Box(Modifier.fillMaxSize().padding(WindowInsets.safeDrawing.asPaddingValues()), contentAlignment = Alignment.Center) {
         Card(Modifier.fillMaxWidth().padding(24.dp), shape = RoundedCornerShape(28.dp)) {
             Column(Modifier.padding(24.dp)) {
-                Text(if (setup) "Create app passcode" else "Unlock TAR-JS", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(if (setup) "Create app PIN" else "Unlock TAR-JS", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    if (setup) "This passcode protects indexed chats and is separate from your rclone password."
-                    else "Chats stay locked until the correct app passcode is entered.",
+                    if (setup) "This 4-digit PIN protects indexed chats and is separate from your rclone password."
+                    else "Chats stay locked until the correct 4-digit PIN is entered.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(18.dp))
                 OutlinedTextField(
                     value = code,
-                    onValueChange = { code = it; vm.passcodeError = null },
-                    label = { Text("Passcode") },
+                    onValueChange = { code = it.filter(Char::isDigit).take(4); vm.passcodeError = null },
+                    label = { Text("4-digit PIN") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = { IconButton(onClick = { visible = !visible }) { Icon(if (visible) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) } },
                     modifier = Modifier.fillMaxWidth()
                 )
                 if (setup) {
                     Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(confirm, { confirm = it; vm.passcodeError = null }, label = { Text("Confirm passcode") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        confirm,
+                        { confirm = it.filter(Char::isDigit).take(4); vm.passcodeError = null },
+                        label = { Text("Confirm PIN") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
                 vm.passcodeError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 10.dp)) }
                 Spacer(Modifier.height(18.dp))
                 Button(
                     onClick = { if (setup) vm.setupPasscode(code, confirm) else vm.attemptUnlock(code) },
-                    enabled = code.length >= 4 && (!setup || confirm.isNotBlank()),
+                    enabled = code.length == 4 && (!setup || confirm.length == 4),
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (setup) "Create passcode" else "Unlock") }
+                ) { Text(if (setup) "Create PIN" else "Unlock") }
                 TextButton(onClick = vm::cancelUnlock, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Back") }
             }
         }
@@ -177,7 +222,7 @@ private fun LockScreen(vm: TarVm) {
 
 @Composable
 private fun HomeScreen(vm: TarVm) {
-    BackHandler { vm.lockNow() }
+    BackHandler(enabled = vm.isPasscodeConfigured()) { vm.lockNow() }
     Scaffold(
         modifier = Modifier.padding(WindowInsets.safeDrawing.asPaddingValues()),
         topBar = {
@@ -185,7 +230,9 @@ private fun HomeScreen(vm: TarVm) {
                 title = { Text("TAR-JS", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { vm.navigateTo(NavigationScreen.Settings) }) { Icon(Icons.Default.Settings, "Settings") }
-                    IconButton(onClick = vm::lockNow) { Icon(Icons.Default.Lock, "Lock") }
+                    if (vm.isPasscodeConfigured()) {
+                        IconButton(onClick = vm::lockNow) { Icon(Icons.Default.Lock, "Lock") }
+                    }
                 }
             )
         },
@@ -374,10 +421,21 @@ private fun ChatScreen(vm: TarVm, onPickPhoto: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val focus = vm.focusMessageId
+    var initialPositioned by remember(chat.id) { mutableStateOf(false) }
     LaunchedEffect(vm.messages, focus) {
+        if (vm.messages.isEmpty()) return@LaunchedEffect
         val index = focus?.let { id -> vm.messages.indexOfFirst { it.id == id } } ?: -1
-        if (index >= 0) listState.scrollToItem(index + if (vm.hasOlder) 1 else 0)
-        else if (vm.messages.isNotEmpty()) listState.scrollToItem(vm.messages.lastIndex + if (vm.hasOlder) 1 else 0)
+        when {
+            index >= 0 -> {
+                listState.scrollToItem(index + if (vm.hasOlder) 1 else 0)
+                initialPositioned = true
+                vm.consumeFocusMessage()
+            }
+            !initialPositioned -> {
+                listState.scrollToItem(vm.messages.lastIndex + if (vm.hasOlder) 1 else 0)
+                initialPositioned = true
+            }
+        }
     }
     BackHandler { vm.openHome() }
     Scaffold(
@@ -405,14 +463,14 @@ private fun ChatScreen(vm: TarVm, onPickPhoto: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             if (vm.hasOlder) item { TextButton(onClick = { vm.loadOlderMessages(chat.id) }, modifier = Modifier.fillMaxWidth()) { Text("Load older messages") } }
-            items(vm.messages, key = { "${it.chatId}-${it.id}" }) { message -> MessageBubble(message, MessageDirection.displayOnRight(message.mine, vm.swapped)) }
+            items(vm.messages, key = { "${it.chatId}-${it.id}" }) { message -> MessageBubble(vm, message, MessageDirection.displayOnRight(message.mine, vm.swapped)) }
             if (vm.hasNewer) item { TextButton(onClick = { vm.loadNewerMessages(chat.id) }, modifier = Modifier.fillMaxWidth()) { Text("Load newer messages") } }
         }
     }
 }
 
 @Composable
-private fun MessageBubble(message: Message, right: Boolean) {
+private fun MessageBubble(vm: TarVm, message: Message, right: Boolean) {
     if (message.isService) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
             Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) { Text(message.text.ifBlank { "Service message" }, Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.labelMedium) }
@@ -424,14 +482,143 @@ private fun MessageBubble(message: Message, right: Boolean) {
             if (!right) Text(message.sender, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = Lavender)
             if (message.isForwarded) Text("Forwarded", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             if (message.replyToId != null) Text("Reply to ${message.replyToId}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            if (message.mediaPath != null) MessageMedia(vm, message)
             if (message.text.isNotBlank()) Text(message.text)
-            else if (message.mediaPath != null) Text(message.fileName ?: message.mediaPath.substringAfterLast('/'), color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(Modifier.align(Alignment.End)) {
                 if (message.isEdited) Text("edited · ", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                 Text(formatMessageTime(message), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
             }
         }
     }
+}
+
+@Composable
+private fun MessageMedia(vm: TarVm, message: Message) {
+    val path = message.mediaPath ?: return
+    var uri by remember(path) { mutableStateOf<Uri?>(null) }
+    var resolved by remember(path) { mutableStateOf(false) }
+    LaunchedEffect(path) {
+        uri = vm.resolveMediaUri(path)
+        resolved = true
+    }
+    val mediaUri = uri
+    if (mediaUri == null) {
+        if (!resolved) LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
+        else if (vm.currentArchiveUsesRclone() && (vm.rcloneNeedsPassword || !vm.hasRememberedRclonePassword())) {
+            FilledTonalButton(onClick = vm::openRcloneUnlockForMedia, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.LockOpen, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Unlock rclone to load media")
+            }
+        } else Text("Media unavailable · ${message.fileName ?: path.substringAfterLast('/')}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        return
+    }
+
+    val lower = path.lowercase()
+    when {
+        lower.endsWith(".tgs") -> AnimatedTgsSticker(mediaUri)
+        lower.endsWith(".webm") && (lower.contains("sticker") || lower.contains("stickers/")) -> ArchiveVideo(mediaUri, sticker = true)
+        lower.endsWith(".webp") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".gif") -> ArchiveImage(mediaUri, sticker = message.mediaType == "sticker" || lower.contains("sticker"))
+        message.mediaType == "video" || lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".webm") -> ArchiveVideo(mediaUri, sticker = false)
+        message.mediaType == "voice" || message.mediaType == "audio" || lower.endsWith(".ogg") || lower.endsWith(".opus") || lower.endsWith(".mp3") || lower.endsWith(".m4a") -> ArchiveAudio(mediaUri, message.mediaType == "voice")
+        else -> OpenMediaButton(mediaUri, message.fileName ?: path.substringAfterLast('/'), message.mimeType ?: "application/octet-stream")
+    }
+    Spacer(Modifier.height(5.dp))
+}
+
+@Composable
+private fun ArchiveImage(uri: Uri, sticker: Boolean) {
+    val context = LocalContext.current
+    var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(uri) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching { context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream) }.getOrNull()
+        }
+    }
+    val image = bitmap
+    if (image == null) Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    else Image(
+        image.asImageBitmap(),
+        contentDescription = if (sticker) "Sticker" else "Photo",
+        modifier = if (sticker) Modifier.sizeIn(maxWidth = 180.dp, maxHeight = 180.dp) else Modifier.fillMaxWidth().heightIn(max = 300.dp).clip(RoundedCornerShape(12.dp)),
+        contentScale = ContentScale.Fit
+    )
+}
+
+@Composable
+private fun AnimatedTgsSticker(uri: Uri) {
+    val context = LocalContext.current
+    var json by remember(uri) { mutableStateOf<String?>(null) }
+    LaunchedEffect(uri) {
+        json = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    GZIPInputStream(input.buffered()).bufferedReader(Charsets.UTF_8).use { it.readText() }
+                }
+            }.getOrNull()
+        }
+    }
+    val stickerJson = json
+    if (stickerJson == null) Box(Modifier.size(170.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    else {
+        val composition by rememberLottieComposition(LottieCompositionSpec.JsonString(stickerJson))
+        LottieAnimation(composition, iterations = LottieConstants.IterateForever, modifier = Modifier.size(170.dp))
+    }
+}
+
+@Composable
+private fun ArchiveVideo(uri: Uri, sticker: Boolean) {
+    AndroidView(
+        factory = { context ->
+            VideoView(context).apply {
+                setVideoURI(uri)
+                if (sticker) {
+                    setOnPreparedListener { player -> player.isLooping = true; player.setVolume(0f, 0f); start() }
+                } else {
+                    setMediaController(MediaController(context).also { it.setAnchorView(this) })
+                    setOnPreparedListener { seekTo(1) }
+                }
+            }
+        },
+        modifier = if (sticker) Modifier.size(180.dp) else Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(12.dp))
+    )
+}
+
+@Composable
+private fun ArchiveAudio(uri: Uri, voice: Boolean) {
+    val context = LocalContext.current
+    var prepared by remember(uri) { mutableStateOf(false) }
+    var playing by remember(uri) { mutableStateOf(false) }
+    val player = remember(uri) {
+        MediaPlayer().apply {
+            setDataSource(context, uri)
+            setOnPreparedListener { prepared = true }
+            setOnCompletionListener { playing = false }
+            prepareAsync()
+        }
+    }
+    DisposableEffect(player) { onDispose { runCatching { player.release() } } }
+    FilledTonalButton(
+        onClick = { if (playing) player.pause() else player.start(); playing = !playing },
+        enabled = prepared,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null)
+        Spacer(Modifier.width(8.dp))
+        Text(if (voice) "${if (playing) "Pause" else "Play"} voice note" else "${if (playing) "Pause" else "Play"} audio")
+    }
+}
+
+@Composable
+private fun OpenMediaButton(uri: Uri, label: String, mimeType: String) {
+    val context = LocalContext.current
+    OutlinedButton(
+        onClick = {
+            val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mimeType).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            runCatching { context.startActivity(intent) }
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) { Icon(Icons.Default.InsertDriveFile, null); Spacer(Modifier.width(8.dp)); Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
 }
 
 @Composable
@@ -524,6 +711,19 @@ private fun SettingsScreen(vm: TarVm) {
         topBar = { TopAppBar(title = { Text("Settings") }, navigationIcon = { IconButton(onClick = { vm.navigateTo(if (chat != null) NavigationScreen.Chat else NavigationScreen.Home) }) { Icon(Icons.Default.ArrowBack, "Back") } }) }
     ) { pad ->
         LazyColumn(Modifier.padding(pad)) {
+            item {
+                ListItem(
+                    headlineContent = { Text("App PIN") },
+                    supportingContent = { Text(if (vm.isPasscodeConfigured()) "On" else "Off — optional") },
+                    trailingContent = {
+                        if (vm.isPasscodeConfigured()) {
+                            TextButton(onClick = vm::disablePasscode) { Text("Turn off") }
+                        } else {
+                            TextButton(onClick = vm::openPasscodeSettings) { Text("Turn on") }
+                        }
+                    }
+                )
+            }
             item {
                 ListItem(
                     headlineContent = { Text("Remember rclone password") },

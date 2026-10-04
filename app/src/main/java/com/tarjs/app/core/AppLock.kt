@@ -43,7 +43,7 @@ class AppLock(private val context: Context) {
      * Validates minimum length and stores salted PBKDF2 hash.
      */
     fun setPasscode(value: String) {
-        require(value.length >= 4) { "Passcode must be at least 4 characters" }
+        require(value.matches(Regex("\\d{4}"))) { "PIN must be exactly 4 digits" }
         require(!configured) { "Passcode already set" }
         val salt = ByteArray(16).also(SecureRandom()::nextBytes)
         prefs.edit().apply {

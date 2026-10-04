@@ -1,0 +1,8 @@
+.gradle/
+.kotlin/
+**/build/
+local.properties
+app/libs/gomobile.aar
+*.iml
+hs_err_pid*.log
+replay_pid*.log

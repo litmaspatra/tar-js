@@ -2,6 +2,7 @@ package com.tarjs.app
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -17,6 +18,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 enum class NavigationScreen {
@@ -33,6 +36,9 @@ class TarVm : ViewModel() {
     private lateinit var passwordManager: RclonePasswordManager
     private var statusJob: Job? = null
     private var searchJob: Job? = null
+    private val mediaUriCache = mutableMapOf<String, Uri?>()
+    private val mediaResolveMutex = Mutex()
+    private var sessionRclonePassword: String? = null
 
     var lockState: LockState by mutableStateOf(LockState.NOT_SET_UP)
         private set
@@ -41,7 +47,7 @@ class TarVm : ViewModel() {
     var failureCount by mutableIntStateOf(0)
         private set
 
-    var screen by mutableStateOf(NavigationScreen.Welcome)
+    var screen by mutableStateOf(NavigationScreen.SourcePicker)
         private set
 
     var chats by mutableStateOf<List<Chat>>(emptyList())
@@ -74,6 +80,8 @@ class TarVm : ViewModel() {
     var importStatus by mutableStateOf("")
         private set
     var importError: String? by mutableStateOf(null)
+        private set
+    var importPhase by mutableStateOf("idle")
         private set
 
     var safFound by mutableStateOf<SafArchiveSource.FoundArchive?>(null)
@@ -118,11 +126,21 @@ class TarVm : ViewModel() {
         failureCount = lock.failureCount
         chats = db.chats()
         rcloneConfigPath = appContext.getSharedPreferences("rclone-state", Context.MODE_PRIVATE).getString("configPath", null)
-        screen = if (lock.configured) NavigationScreen.Lock else NavigationScreen.Welcome
+        rcloneEncrypted = rcloneConfigPath?.let { path ->
+            runCatching { configManager.isEncrypted(File(path).readText(Charsets.UTF_8)) }.getOrDefault(false)
+        } ?: false
+        rcloneNeedsPassword = rcloneEncrypted && !passwordManager.hasRememberedPassword()
+        screen = when {
+            lock.configured -> NavigationScreen.Lock
+            chats.isEmpty() -> NavigationScreen.SourcePicker
+            else -> NavigationScreen.Home
+        }
+        if (!lock.configured) silentUnlockRememberedRclone()
         startImportStatusPolling()
     }
 
-    fun beginSetupOrUnlock() {
+    fun openPasscodeSettings() {
+        lockState = lock.state
         screen = NavigationScreen.Lock
         passcodeError = null
         passcodeInput = ""
@@ -130,8 +148,8 @@ class TarVm : ViewModel() {
 
     fun setupPasscode(passcode: String, confirmation: String) {
         passcodeError = when {
-            passcode.length < 4 -> "Use at least 4 characters"
-            passcode != confirmation -> "Passcodes do not match"
+            !passcode.matches(Regex("\\d{4}")) -> "Use exactly 4 digits"
+            passcode != confirmation -> "PINs do not match"
             else -> null
         }
         if (passcodeError != null) return
@@ -139,7 +157,7 @@ class TarVm : ViewModel() {
             .onSuccess {
                 lockState = lock.state
                 passcodeInput = ""
-                openHome()
+                screen = NavigationScreen.Settings
             }
             .onFailure { passcodeError = it.message ?: "Could not create passcode" }
     }
@@ -163,15 +181,25 @@ class TarVm : ViewModel() {
     fun cancelUnlock() {
         lock.cancelUnlock()
         lockState = lock.state
-        screen = NavigationScreen.Welcome
+        screen = if (lock.configured) NavigationScreen.Welcome else NavigationScreen.Settings
     }
 
     fun lockNow() {
+        if (!lock.configured) return
         lock.lockApp()
         lockState = lock.state
         selectedChat = null
         messages = emptyList()
         screen = NavigationScreen.Lock
+    }
+
+    fun isPasscodeConfigured(): Boolean = lock.configured
+
+    fun disablePasscode() {
+        lock.reset()
+        lockState = lock.state
+        failureCount = 0
+        passcodeError = null
     }
 
     fun openHome() {
@@ -307,7 +335,7 @@ class TarVm : ViewModel() {
                 SafArchiveSource.snapshotResultJson(appContext, found.resultJsonUri, id).map { snapshot ->
                     SafArchiveSource.saveArchiveMetadata(
                         appContext,
-                        SafArchiveSource.ArchiveSource(id, sourceType, found.parentFolderUri.toString(), SafArchiveSource.sha256(snapshot), System.currentTimeMillis())
+                        SafArchiveSource.ArchiveSource(id, sourceType, found.parentFolderUri.toString(), "", System.currentTimeMillis())
                     )
                     snapshot
                 }
@@ -354,7 +382,9 @@ class TarVm : ViewModel() {
             val result = withContext(Dispatchers.IO) { passwordManager.unlockAndMaybeRemember(path, password, remember) }
             sourceBusy = false
             result.onSuccess {
+                sessionRclonePassword = if (remember) null else password
                 rcloneNeedsPassword = false
+                mediaUriCache.clear()
                 rcloneRemotes = withContext(Dispatchers.IO) { RcloneRuntime.listRemotes() }
                 if (!silent) screen = NavigationScreen.RcloneConfig
             }.onFailure {
@@ -371,7 +401,16 @@ class TarVm : ViewModel() {
         unlockRclone(remembered, remember = true, silent = true)
     }
 
-    fun forgetRclonePassword() = passwordManager.forgetPassword()
+    fun forgetRclonePassword() {
+        passwordManager.forgetPassword()
+        sessionRclonePassword = null
+        mediaUriCache.clear()
+        rcloneNeedsPassword = rcloneEncrypted
+    }
+
+    fun consumeFocusMessage() {
+        focusMessageId = null
+    }
     fun hasRememberedRclonePassword(): Boolean = passwordManager.hasRememberedPassword()
 
     fun clearSelectedRemote() { selectedRemote = null; remotePath = ""; remoteEntries = emptyList() }
@@ -409,27 +448,27 @@ class TarVm : ViewModel() {
         if (sourceBusy) return
         sourceBusy = true
         sourceError = null
-        viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val id = UUID.randomUUID().toString()
-                    val dir = File(appContext.filesDir, "archives/$id").also { it.mkdirs() }
-                    val snapshot = File(dir, "result.json")
-                    val remoteFile = listOf(remotePath.trim('/'), resultEntry.name).filter(String::isNotBlank).joinToString("/")
-                    RcloneRuntime.copyToLocal(remote, remoteFile, snapshot)
-                    val text = snapshot.readText(Charsets.UTF_8)
-                    SafArchiveSource.validateTelegramExport(text).getOrThrow()
-                    SafArchiveSource.saveArchiveMetadata(
-                        appContext,
-                        SafArchiveSource.ArchiveSource(id, "rclone", "$remote:$remotePath", SafArchiveSource.sha256(snapshot), System.currentTimeMillis())
-                    )
-                    snapshot
-                }
-            }
-            sourceBusy = false
-            result.onSuccess { ArchiveImportService.start(appContext, it); screen = NavigationScreen.ImportProgress }
-                .onFailure { sourceError = it.message ?: "Unable to import remote result.json" }
+        importPhase = "downloading"
+        importProgress = 0
+        importTotal = 0
+        importStatus = "Downloading result.json"
+        importError = null
+        screen = NavigationScreen.ImportProgress
+        runCatching {
+            val id = UUID.randomUUID().toString()
+            val snapshot = File(File(appContext.filesDir, "archives/$id"), "result.json")
+            val remoteFile = listOf(remotePath.trim('/'), resultEntry.name).filter(String::isNotBlank).joinToString("/")
+            val source = SafArchiveSource.ArchiveSource(
+                id, "rclone", "$remote:$remotePath", "", System.currentTimeMillis()
+            )
+            ArchiveImportService.startRclone(appContext, snapshot, remote, remoteFile, source)
+        }.onFailure {
+            sourceError = it.message ?: "Unable to start remote import"
+            importPhase = "error"
+            importError = sourceError
+            screen = NavigationScreen.RcloneConfig
         }
+        sourceBusy = false
     }
 
     fun beginProfilePhoto(uri: Uri) {
@@ -468,11 +507,61 @@ class TarVm : ViewModel() {
 
     fun cancelImport() { ArchiveImportService.cancel(appContext) }
 
+    suspend fun resolveMediaUri(relativePath: String): Uri? = withContext(Dispatchers.IO) {
+        mediaResolveMutex.withLock {
+            if (mediaUriCache.containsKey(relativePath)) return@withLock mediaUriCache[relativePath]
+            val source = SafArchiveSource.currentArchiveSource(appContext)
+            val resolved = source?.let { archive ->
+                when (archive.type) {
+                    "rclone" -> materializeRcloneMedia(archive, relativePath)?.let(Uri::fromFile)
+                    else -> SafArchiveSource.resolveSafMediaUri(appContext, archive, relativePath)
+                }
+            }
+            if (resolved != null) mediaUriCache[relativePath] = resolved
+            resolved
+        }
+    }
+
+    fun currentArchiveUsesRclone(): Boolean = SafArchiveSource.currentArchiveSource(appContext)?.type == "rclone"
+
+    fun openRcloneUnlockForMedia() {
+        rcloneNeedsPassword = true
+        sourceError = null
+        screen = NavigationScreen.RcloneConfig
+    }
+
+    private fun materializeRcloneMedia(source: SafArchiveSource.ArchiveSource, relativePath: String): File? {
+        val normalized = relativePath.replace('\\', '/').trimStart('/')
+        val segments = normalized.split('/').filter(String::isNotBlank)
+        if (segments.isEmpty() || segments.any { it == "." || it == ".." }) return null
+        val separator = source.path.indexOf(':')
+        if (separator <= 0) return null
+        val remote = source.path.substring(0, separator)
+        val base = source.path.substring(separator + 1).trim('/')
+        val cacheDir = File(appContext.cacheDir, "archive-media/${source.id}").also { it.mkdirs() }
+        val target = File(cacheDir, "${normalized.hashCode()}_${File(normalized).name.ifBlank { "media.bin" }}")
+        if (target.isFile && target.length() > 0L) return target
+        return runCatching {
+            val configPath = rcloneConfigPath ?: error("rclone config is not available")
+            val password = passwordManager.getRememberedPassword() ?: sessionRclonePassword
+            if (rcloneEncrypted && password == null) error("Encrypted rclone config must be unlocked")
+            RcloneRuntime.unlock(File(configPath), password)
+            val remoteFile = listOf(base, normalized).filter(String::isNotBlank).joinToString("/")
+            RcloneRuntime.copyToLocal(remote, remoteFile, target)
+            require(target.isFile && target.length() > 0L) { "Downloaded media is empty" }
+            target
+        }.onFailure {
+            target.delete()
+            Log.w("TARJS-Media", "Unable to load rclone media: ${it.message}")
+        }.getOrNull()
+    }
+
     private fun startImportStatusPolling() {
         statusJob?.cancel()
         statusJob = viewModelScope.launch {
             while (isActive) {
                 val status = ArchiveImportService.status(appContext)
+                importPhase = status.phase
                 importProgress = status.done
                 importTotal = status.total
                 importStatus = status.message

@@ -47,7 +47,7 @@ jobs:
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
           "$HOME/go/bin/gomobile" init
           go test ./librclone/gomobile -run TestRcloneResetEncryptedConfig -count=1
-          "$HOME/go/bin/gomobile" bind -androidapi 26 -target=android/arm64,android/amd64 -javapkg=org.rclone -o gomobile.aar github.com/rclone/rclone/librclone/gomobile
+          "$HOME/go/bin/gomobile" bind -androidapi 26 -target=android/arm64 -ldflags='-s -w' -javapkg=org.rclone -o gomobile.aar github.com/rclone/rclone/librclone/gomobile
           mkdir -p "$GITHUB_WORKSPACE/app/libs"
           cp gomobile.aar "$GITHUB_WORKSPACE/app/libs/gomobile.aar"
       - name: Verify AAR contents
@@ -57,7 +57,6 @@ jobs:
           unzip -p app/libs/gomobile.aar classes.jar > "$RUNNER_TEMP/classes.jar"
           jar tf "$RUNNER_TEMP/classes.jar" | grep -q '^org/rclone/gomobile/Gomobile.class$'
           unzip -l app/libs/gomobile.aar | grep -q 'jni/arm64-v8a/libgojni.so'
-          unzip -l app/libs/gomobile.aar | grep -q 'jni/x86_64/libgojni.so'
       - name: Unit tests and lint
         run: gradle --no-daemon testDebugUnitTest lintDebug
       - name: Debug APK
