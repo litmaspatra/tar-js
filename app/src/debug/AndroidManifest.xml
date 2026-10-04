@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <permission
+        android:name="com.tarjs.app.permission.TEST_FIXTURE"
+        android:protectionLevel="signature" />
+    <application>
+        <provider
+            android:name="com.tarjs.app.core.FixtureDocumentsProvider"
+            android:authorities="com.tarjs.app.fixture.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="com.tarjs.app.permission.TEST_FIXTURE" />
+    </application>
+</manifest>

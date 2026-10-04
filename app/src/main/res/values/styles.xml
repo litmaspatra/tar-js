@@ -1,0 +1,3 @@
+<resources>
+ <style name="Theme.TarJs" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#6A4CE0</item><item name="android:navigationBarColor">#FBF8FF</item><item name="android:statusBarColor">#FBF8FF</item><item name="android:windowLightStatusBar">true</item></style>
+</resources>

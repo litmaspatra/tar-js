@@ -1,0 +1,17 @@
+{
+  "personal_information": {"user_information": {"user_id": "owner-42", "first_name": "Owner"}},
+  "chats": {"list": [
+    {"id": 1001, "type": "private_supergroup", "name": "Fixture Group", "messages": [
+      {"id": 1, "type": "message", "date": "2026-01-01T00:00:00", "from": "Owner", "from_id": "owner-42", "text": "owner plain text"},
+      {"id": 2, "type": "message", "date": "2026-01-01T00:01:00", "from": "Receiver", "from_id": "receiver-7", "text": [{"type":"plain","text":"rich "},{"type":"bold","text":"text"}], "reply_to_message_id": 1},
+      {"id": 3, "type": "message", "date": "2026-01-01T00:02:00", "from": "Receiver", "from_id": "receiver-7", "text": "forwarded message", "forwarded_from": "Other"},
+      {"id": 4, "type": "service", "date": "2026-01-01T00:03:00", "actor": "Owner", "action": "invite_members", "text": "service event"},
+      {"id": 5, "type": "message", "date": "2026-01-01T00:04:00", "from": "Owner", "from_id": "owner-42", "text": "edited body", "edited": "2026-01-01T00:05:00", "media_type": "photo", "file": "media/photo.webp"},
+      {"id": 6, "type": "message", "date": "2026-01-01T00:06:00", "from": "Receiver", "from_id": "receiver-7", "text": "video audio voice file", "media": ["media/video.mp4","media/audio.mp3","media/voice.ogg","media/file.bin"]},
+      {"id": 7, "type": "message", "date": "2026-01-01T00:07:00", "from": "Receiver", "from_id": "receiver-7", "text": "stickers", "media": ["media/static.webp","media/animated.tgs","media/sticker.webm"]}
+    ]},
+    {"id": 1002, "type": "private", "name": "Single Chat", "messages": [
+      {"id": 8, "type": "message", "date": "2026-01-02T00:00:00", "from": "Owner", "from_id": "owner-42", "text": "single-chat old-result search token"}
+    ]}
+  ]}
+}
