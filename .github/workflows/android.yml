@@ -33,7 +33,14 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0" \
             "ndk;27.2.12479018"
+      - name: Cache pinned rclone Android library
+        id: rclone-cache
+        uses: actions/cache@v4
+        with:
+          path: app/libs/gomobile.aar
+          key: tarjs-rclone-v1.75.1-go1.26.6-${{ hashFiles('ci/rclone_reset_android.go', 'ci/rclone_reset_test.go') }}
       - name: Build pinned rclone Android library
+        if: steps.rclone-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           git clone --depth 1 --branch v1.75.1 https://github.com/rclone/rclone.git "$RUNNER_TEMP/rclone"
@@ -53,8 +60,6 @@ jobs:
             github.com/rclone/rclone/librclone/gomobile
           mkdir -p "$GITHUB_WORKSPACE/app/libs"
           cp gomobile.aar "$GITHUB_WORKSPACE/app/libs/gomobile.aar"
-      - name: Test and lint
-        run: gradle --no-daemon testDebugUnitTest lintDebug
       - name: Build APK
         run: gradle --no-daemon assembleDebug
       - uses: actions/upload-artifact@v4
@@ -62,6 +67,8 @@ jobs:
           name: TAR-JS-${{ github.sha }}
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Test and lint
+        run: gradle --no-daemon testDebugUnitTest lintDebug
       - uses: actions/upload-artifact@v4
         if: always()
         with:
