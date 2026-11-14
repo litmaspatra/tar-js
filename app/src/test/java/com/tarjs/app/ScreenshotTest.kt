@@ -37,7 +37,14 @@ class ScreenshotTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.deleteDatabase("tarjs_archive.db")
         val db = ArchiveDb(context)
-        val result = db.importJson(fixtureJson()) { _, _ -> }
+        val json = fixtureJson()
+        val probe = runCatching { org.json.JSONObject(json) }
+        if (probe.isFailure) {
+            println("FIXTURE HEAD: " + json.take(400))
+            println("FIXTURE TAIL: " + json.takeLast(400))
+        }
+        check(probe.isSuccess) { "Fixture JSON malformed: ${probe.exceptionOrNull()?.message}" }
+        val result = db.importJson(json) { _, _ -> }
         check(result.error == null) { "Fixture import failed: ${result.error}" }
         db.addBookmark(100, 40)
         db.addBookmark(200, 5)

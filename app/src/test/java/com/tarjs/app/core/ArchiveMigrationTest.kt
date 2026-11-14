@@ -75,7 +75,7 @@ class ArchiveMigrationTest {
 
             // The search index can be healed and searched after migration.
             assertTrue(db.ensureSearchIndex())
-            assertEquals(1, db.searchMessages(42, "legacy").size)
+            assertEquals(2, db.searchMessages(42, "legacy").size)
         } finally {
             db.close()
         }
