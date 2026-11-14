@@ -46,6 +46,8 @@ data class SearchFilter(
 
 data class BookmarkedMessage(val message: Message, val chatTitle: String)
 
+data class MergeResult(val chatsAdded: Int, val messagesAdded: Int, val bookmarksAdded: Int)
+
 data class ImportResult(
     val chats: Int,
     val messages: Int,
@@ -574,16 +576,47 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
         if (c.moveToFirst() && !c.isNull(0) && !c.isNull(1)) c.getLong(0) to c.getLong(1) else null
     }
 
-    fun clear() = writableDatabase.apply {
-        beginTransaction()
+    /**
+     * Merges a restored backup into this archive without deleting anything
+     * already on the device: existing chats, messages, bookmarks and chat
+     * preferences win on conflicts. Supports backups written by schema v6
+     * and v7. Chats are never deletable in the app, so a restore must not
+     * become a delete path either.
+     */
+    fun mergeBackup(backupFile: File): MergeResult {
+        val db = writableDatabase
+        db.execSQL("ATTACH DATABASE ? AS backup", arrayOf(backupFile.absolutePath))
         try {
-            execSQL("DELETE FROM messages_fts")
-            execSQL("DELETE FROM messages")
-            execSQL("DELETE FROM chats")
-            execSQL("DELETE FROM chat_preferences")
-            execSQL("DELETE FROM bookmarks")
-            setTransactionSuccessful()
-        } finally { endTransaction() }
+            val version = db.compileStatement("PRAGMA backup.user_version").simpleQueryForLong().toInt()
+            require(version in 6..7) { "Backup was written by an incompatible app version" }
+            db.beginTransaction()
+            try {
+                db.execSQL("INSERT OR IGNORE INTO chats(id,title,preview,count,is_group,owner,created_at) SELECT id,title,preview,count,is_group,owner,created_at FROM backup.chats")
+                val chatsAdded = db.compileStatement("SELECT changes()").simpleQueryForLong().toInt()
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO messages(message_id,chat_id,sender,text,date,date_unix,mine,reply_to_id,is_forwarded,is_edited,is_service,media_path,media_type,file_name,mime_type,duration_seconds)
+                    SELECT message_id,chat_id,sender,text,date,date_unix,mine,reply_to_id,is_forwarded,is_edited,is_service,media_path,media_type,file_name,mime_type,duration_seconds FROM backup.messages
+                    """.trimIndent()
+                )
+                val messagesAdded = db.compileStatement("SELECT changes()").simpleQueryForLong().toInt()
+                var bookmarksAdded = 0
+                if (version >= 7) {
+                    db.execSQL("INSERT OR IGNORE INTO chat_preferences(chat_id,swap_sides,custom_name,custom_avatar_path,avatar_zoom,avatar_offset_x,avatar_offset_y,last_read_message_id,last_read_date_unix) SELECT chat_id,swap_sides,custom_name,custom_avatar_path,avatar_zoom,avatar_offset_x,avatar_offset_y,last_read_message_id,last_read_date_unix FROM backup.chat_preferences")
+                    db.execSQL("INSERT OR IGNORE INTO bookmarks(chat_id,message_id,created_at) SELECT chat_id,message_id,created_at FROM backup.bookmarks")
+                    bookmarksAdded = db.compileStatement("SELECT changes()").simpleQueryForLong().toInt()
+                } else {
+                    db.execSQL("INSERT OR IGNORE INTO chat_preferences(chat_id,swap_sides,custom_name,custom_avatar_path,avatar_zoom,avatar_offset_x,avatar_offset_y) SELECT chat_id,swap_sides,custom_name,custom_avatar_path,avatar_zoom,avatar_offset_x,avatar_offset_y FROM backup.chat_preferences")
+                }
+                rebuildSearchIndex(db)
+                db.setTransactionSuccessful()
+                return MergeResult(chatsAdded, messagesAdded, bookmarksAdded)
+            } finally {
+                db.endTransaction()
+            }
+        } finally {
+            db.execSQL("DETACH DATABASE backup")
+        }
     }
 
     /** Stream a potentially multi-gigabyte Telegram export into bounded SQLite batches. */

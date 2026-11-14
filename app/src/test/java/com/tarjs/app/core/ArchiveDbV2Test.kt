@@ -95,6 +95,17 @@ class ArchiveDbV2Test {
     }
 
     @Test
+    fun importingAnotherExportNeverDeletesExistingChats() {
+        importJson(sameSecondChatJson(50))
+        importJson(twoChatsJson())
+        // The first import's chat survives the second import untouched.
+        assertEquals(50L, db.messageCount(100))
+        assertEquals(1L, db.messageCount(200))
+        assertEquals(2, db.chats().size)
+        assertTrue(db.searchMessages(100, "second").isNotEmpty())
+    }
+
+    @Test
     fun messageWindowIncludesSameSecondNeighbours() {
         importJson(sameSecondChatJson(250))
         val window = db.messageWindow(100, 125, before = 10, after = 10)

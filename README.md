@@ -8,7 +8,8 @@ TAR-JS is a private Android reader for large Telegram JSON exports. It indexes c
 - Jump to any date, the first or latest message, with continuous scroll paging
 - Archive-wide search with sender, date and media filters
 - Per-chat media gallery and bookmarked messages
-- Optional encrypted local backup of the archive index
+- Optional encrypted local backup of the archive index (restoring merges without deleting anything)
+- Chats are never deletable in the app, and cloud (rclone/Backblaze) access is strictly read-only
 - Photos, videos, voice notes, files, and static or animated stickers
 - Telegram-style light and dark themes
 - Optional four-digit app lock

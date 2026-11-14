@@ -617,6 +617,11 @@ class TarVm : ViewModel() {
         }
     }
 
+    /**
+     * Restores by merging the backup into the current archive. Nothing already
+     * on the phone is removed - chats are never deletable in this app, and a
+     * restore must not become a way around that.
+     */
     fun restoreBackup(uri: Uri, passphrase: String?) {
         if (backupBusy) return
         if (importPhase in setOf("downloading", "indexing")) {
@@ -628,28 +633,24 @@ class TarVm : ViewModel() {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val dbFile = appContext.getDatabasePath(DATABASE_NAME)
-                    appContext.contentResolver.openInputStream(uri)?.use { input ->
-                        ArchiveBackup.restoreBackup(input, passphrase, dbFile)
-                    } ?: error("Unable to open backup file")
+                    val temp = File(appContext.cacheDir, "restore-" + UUID.randomUUID().toString() + ".db")
+                    try {
+                        appContext.contentResolver.openInputStream(uri)?.use { input ->
+                            ArchiveBackup.unpackBackup(input, passphrase, temp)
+                        } ?: error("Unable to open backup file")
+                        db.mergeBackup(temp)
+                    } finally {
+                        temp.delete()
+                    }
                 }
             }
-            result.onSuccess {
-                withContext(Dispatchers.IO) {
-                    db.close()
-                    File(appContext.getDatabasePath(DATABASE_NAME).path + "-wal").delete()
-                    File(appContext.getDatabasePath(DATABASE_NAME).path + "-shm").delete()
-                    db = ArchiveDb(appContext)
-                    chatSearch = ChatSearch(db)
-                    db.ensureSearchIndex()
-                    chats = db.chats()
+            result.onSuccess { merge ->
+                chats = withContext(Dispatchers.IO) { db.chats() }
+                backupMessage = if (merge.messagesAdded > 0) {
+                    "Backup merged - " + merge.messagesAdded.toString() + " messages added. Nothing on this phone was removed."
+                } else {
+                    "Everything in this backup is already on this phone. Nothing changed."
                 }
-                selectedChat = null
-                messages = emptyList()
-                bookmarksList = emptyList()
-                searchResults = emptyList()
-                backupMessage = "Backup restored"
-                screen = NavigationScreen.Home
             }.onFailure {
                 backupMessage = it.userFacingMessage("Restore failed")
             }

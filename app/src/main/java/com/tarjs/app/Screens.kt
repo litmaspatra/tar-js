@@ -1207,7 +1207,7 @@ private fun SettingsScreen(vm: TarVm) {
                 Column(Modifier.padding(16.dp)) {
                     Text("Backup", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text(
-                        "Optional. Encrypted with your passphrase when one is set. Restoring replaces the archive currently on this phone.",
+                        "Optional. Encrypted with your passphrase when one is set. Restoring merges the backup into this archive - nothing already on this phone is removed.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall
                     )

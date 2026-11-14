@@ -17,7 +17,8 @@ import javax.crypto.spec.SecretKeySpec
  * Optional, explicit local backup of the archive database. Android cloud backup
  * stays disabled; nothing leaves the device unless the user saves or shares the
  * exported file themselves. When a passphrase is given the backup is encrypted
- * with PBKDF2-HmacSHA256 + AES-256-GCM.
+ * with PBKDF2-HmacSHA256 + AES-256-GCM. Restoring merges into the existing
+ * archive (see ArchiveDb.mergeBackup) and never deletes on-device chats.
  */
 object ArchiveBackup {
     private const val MAGIC = "TARJSBAK"
@@ -49,7 +50,13 @@ object ArchiveBackup {
         }
     }
 
-    fun restoreBackup(input: InputStream, passphrase: String?, targetFile: File) {
+    /**
+     * Decrypts and validates a backup into [outFile]. Never touches the live
+     * archive: callers decide what to do with the unpacked database (TAR-JS
+     * merges it, so restoring can never delete existing chats). On any
+     * failure [outFile] is deleted and nothing is left behind.
+     */
+    fun unpackBackup(input: InputStream, passphrase: String?, outFile: File) {
         val buffered = input.buffered(256 * 1024)
         val magic = ByteArray(MAGIC.length).also { readFully(buffered, it) }
         require(String(magic, Charsets.US_ASCII) == MAGIC) { "Not a TAR-JS backup file" }
@@ -65,20 +72,15 @@ object ArchiveBackup {
             }
             else -> throw IllegalArgumentException("Unsupported backup version")
         }
-        val temp = File(targetFile.parentFile, targetFile.name + ".restore-tmp")
         try {
-            temp.outputStream().buffered(256 * 1024).use { out -> plain.copyTo(out, 256 * 1024) }
-            temp.inputStream().use { check ->
+            outFile.outputStream().buffered(256 * 1024).use { out -> plain.copyTo(out, 256 * 1024) }
+            outFile.inputStream().use { check ->
                 val header = ByteArray(SQLITE_HEADER.length).also { readFully(check, it) }
                 require(String(header, Charsets.US_ASCII) == SQLITE_HEADER) { "Backup did not contain a valid archive" }
             }
-            File(targetFile.parentFile, targetFile.name + "-wal").delete()
-            File(targetFile.parentFile, targetFile.name + "-shm").delete()
-            File(targetFile.parentFile, targetFile.name + "-journal").delete()
-            if (targetFile.exists() && !targetFile.delete()) error("Could not replace the current archive")
-            check(temp.renameTo(targetFile)) { "Could not move restored archive into place" }
-        } finally {
-            temp.delete()
+        } catch (e: Exception) {
+            outFile.delete()
+            throw e
         }
     }
 

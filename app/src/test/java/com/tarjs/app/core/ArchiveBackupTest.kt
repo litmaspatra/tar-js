@@ -27,7 +27,7 @@ class ArchiveBackupTest {
         val out = ByteArrayOutputStream()
         ArchiveBackup.exportBackup(source, out, null)
         val target = File.createTempFile("restore", ".db")
-        ArchiveBackup.restoreBackup(ByteArrayInputStream(out.toByteArray()), null, target)
+        ArchiveBackup.unpackBackup(ByteArrayInputStream(out.toByteArray()), null, target)
         assertArrayEquals(source.readBytes(), target.readBytes())
     }
 
@@ -37,7 +37,7 @@ class ArchiveBackupTest {
         val out = ByteArrayOutputStream()
         ArchiveBackup.exportBackup(source, out, "correct horse battery")
         val target = File.createTempFile("restore", ".db")
-        ArchiveBackup.restoreBackup(ByteArrayInputStream(out.toByteArray()), "correct horse battery", target)
+        ArchiveBackup.unpackBackup(ByteArrayInputStream(out.toByteArray()), "correct horse battery", target)
         assertArrayEquals(source.readBytes(), target.readBytes())
     }
 
@@ -46,9 +46,11 @@ class ArchiveBackupTest {
         val source = fakeDb()
         val out = ByteArrayOutputStream()
         ArchiveBackup.exportBackup(source, out, "right")
+        val target = File.createTempFile("restore", ".db")
         assertThrows(Exception::class.java) {
-            ArchiveBackup.restoreBackup(ByteArrayInputStream(out.toByteArray()), "wrong", File.createTempFile("restore", ".db"))
+            ArchiveBackup.unpackBackup(ByteArrayInputStream(out.toByteArray()), "wrong", target)
         }
+        assertTrue(!target.exists() || target.length() == 0L)
     }
 
     @Test
@@ -57,7 +59,7 @@ class ArchiveBackupTest {
         val out = ByteArrayOutputStream()
         ArchiveBackup.exportBackup(source, out, "needed")
         assertThrows(Exception::class.java) {
-            ArchiveBackup.restoreBackup(ByteArrayInputStream(out.toByteArray()), null, File.createTempFile("restore", ".db"))
+            ArchiveBackup.unpackBackup(ByteArrayInputStream(out.toByteArray()), null, File.createTempFile("restore", ".db"))
         }
     }
 
@@ -95,12 +97,10 @@ class ArchiveBackupTest {
     fun unsupportedVersionRejectedAndTargetPreserved() {
         val forged = "TARJSBAK".toByteArray(Charsets.US_ASCII) + byteArrayOf(99) + ByteArray(2048)
         val target = File.createTempFile("restore", ".db")
-        target.writeBytes(fakeDb().readBytes())
-        val before = target.readBytes()
         assertThrows(Exception::class.java) {
-            ArchiveBackup.restoreBackup(ByteArrayInputStream(forged), "pw", target)
+            ArchiveBackup.unpackBackup(ByteArrayInputStream(forged), "pw", target)
         }
-        assertArrayEquals(before, target.readBytes())
+        assertTrue(!target.exists() || target.length() == 0L)
     }
 
     @Test
@@ -111,12 +111,10 @@ class ArchiveBackupTest {
         val tampered = out.toByteArray()
         tampered[tampered.size - 5] = (tampered[tampered.size - 5] + 1).toByte()
         val target = File.createTempFile("restore", ".db")
-        target.writeBytes(fakeDb().readBytes())
-        val before = target.readBytes()
         assertThrows(Exception::class.java) {
-            ArchiveBackup.restoreBackup(ByteArrayInputStream(tampered), "pw", target)
+            ArchiveBackup.unpackBackup(ByteArrayInputStream(tampered), "pw", target)
         }
-        assertArrayEquals(before, target.readBytes())
+        assertTrue(!target.exists() || target.length() == 0L)
     }
 
     @Test
@@ -142,7 +140,7 @@ class ArchiveBackupTest {
         val out = ByteArrayOutputStream()
         ArchiveBackup.exportBackup(file, out, "big")
         val target = File.createTempFile("restore", ".db")
-        ArchiveBackup.restoreBackup(ByteArrayInputStream(out.toByteArray()), "big", target)
+        ArchiveBackup.unpackBackup(ByteArrayInputStream(out.toByteArray()), "big", target)
         assertArrayEquals(payload, target.readBytes())
     }
 
@@ -153,11 +151,10 @@ class ArchiveBackupTest {
         val out = ByteArrayOutputStream()
         ArchiveBackup.exportBackup(notDb, out, null)
         val target = File.createTempFile("restore", ".db")
-        target.writeText("pre-existing archive")
         assertThrows(Exception::class.java) {
-            ArchiveBackup.restoreBackup(ByteArrayInputStream(out.toByteArray()), null, target)
+            ArchiveBackup.unpackBackup(ByteArrayInputStream(out.toByteArray()), null, target)
         }
-        // The failed restore must not destroy the existing archive.
-        assertTrue(target.readText().startsWith("pre-existing archive"))
+        // A failed unpack must not leave a partial file behind.
+        assertTrue(!target.exists() || target.length() == 0L)
     }
 }

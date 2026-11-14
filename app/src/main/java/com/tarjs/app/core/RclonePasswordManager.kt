@@ -135,7 +135,33 @@ object RcloneRuntime {
         method.invoke(null, value)
     }
 
+    /**
+     * The app is read-only against every remote: imports and media reads only.
+     * No RPC outside this allowlist can ever run, so there is no code path
+     * that can delete, overwrite or sync back to rclone/Backblaze storage.
+     */
+    private val allowedRpcMethods = setOf(
+        "config/listremotes",
+        "config/dump",
+        "config/unlock",
+        "options/set",
+        "operations/list",
+        "operations/copyfile"
+    )
+
+    internal fun checkReadOnlyOperation(method: String, params: JSONObject) {
+        require(method in allowedRpcMethods) { "rclone operation '$method' is blocked: TAR-JS never modifies remote storage" }
+        if (method == "operations/copyfile") {
+            // Copying is only ever remote -> local. A remote destination fs
+            // (containing ':' like 'b2:bucket') must be rejected outright.
+            val dstFs = params.optString("dstFs")
+            require(dstFs.startsWith("/")) { "rclone copy destination must be a local app directory" }
+            require(!params.optString("srcFs").startsWith("/")) { "rclone copy source must be a configured remote" }
+        }
+    }
+
     private fun rpcChecked(method: String, params: JSONObject): JSONObject {
+        checkReadOnlyOperation(method, params)
         val cls = Class.forName(CLASS_NAME)
         val rpc = cls.methods.firstOrNull { it.name.equals("rcloneRPC", ignoreCase = true) && it.parameterCount == 2 }
             ?: error("Embedded rclone RPC API is unavailable")
