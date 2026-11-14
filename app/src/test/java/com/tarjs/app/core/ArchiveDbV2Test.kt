@@ -75,6 +75,26 @@ class ArchiveDbV2Test {
     }
 
     @Test
+    fun reimportAfterInterruptionRestoresMissingRowsAndDedupes() {
+        val json = sameSecondChatJson(200)
+        importJson(json)
+        // Simulate an interrupted import: the newest 40 message rows (and their
+        // index entries) never made it before the process stopped.
+        db.writableDatabase.execSQL("DELETE FROM messages WHERE chat_id=100 AND message_id>160")
+        db.writableDatabase.execSQL("DELETE FROM messages_fts WHERE docid NOT IN (SELECT row_id FROM messages)")
+        assertEquals(160L, db.messageCount(100))
+
+        val second = importJson(json)
+        assertNull(second.error)
+        assertEquals(160, second.deduped)
+        assertEquals(200L, db.messageCount(100))
+        // No duplicates were created by the recovery import.
+        assertEquals(200, db.messages(100, olderThanDate = Long.MAX_VALUE, limit = 300).size)
+        // The restored tail is searchable again.
+        assertEquals(1, db.searchMessages(100, "message 199").size)
+    }
+
+    @Test
     fun messageWindowIncludesSameSecondNeighbours() {
         importJson(sameSecondChatJson(250))
         val window = db.messageWindow(100, 125, before = 10, after = 10)

@@ -1211,6 +1211,12 @@ private fun SettingsScreen(vm: TarVm) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall
                     )
+                    Text(
+                        "Contains the searchable index, bookmarks and chat preferences. Media files stay in their original folder and are not copied; your PIN and rclone settings are not included.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         exportPassphrase,
