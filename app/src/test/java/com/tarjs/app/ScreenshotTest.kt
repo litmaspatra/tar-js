@@ -3,6 +3,7 @@ package com.tarjs.app
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.os.Looper
 import android.view.ViewGroup
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.lifecycle.ViewModelProvider
@@ -17,6 +18,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
@@ -100,43 +102,61 @@ class ScreenshotTest {
     }
 
     private fun settle() {
-        composeRule.waitForIdle()
+        pumpLooper()
         Thread.sleep(400)
+        pumpLooper()
+    }
+
+    private fun pumpLooper() {
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
         composeRule.waitForIdle()
+    }
+
+    // composeRule.waitUntil does not reliably run viewModelScope coroutines posted to the
+    // main looper under Robolectric, so pump the looper explicitly while polling.
+    private fun pumpUntil(timeoutMillis: Long, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (System.currentTimeMillis() < deadline) {
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            if (condition()) return
+            Thread.sleep(50)
+        }
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        check(condition()) { "condition not satisfied after ${timeoutMillis} ms" }
     }
 
     @Test
     fun captureKeyScreens() {
-        composeRule.waitUntil(10_000) { vm.chats.isNotEmpty() }
+        pumpUntil(10_000) { vm.chats.isNotEmpty() }
         settle()
         save("01-home")
 
         val chat = vm.chats.first { it.id == 100L }
         vm.selectChat(chat)
-        composeRule.waitUntil(10_000) { vm.messages.isNotEmpty() }
+        pumpUntil(10_000) { vm.messages.isNotEmpty() }
         settle()
         save("02-chat")
 
         vm.jumpToFirst()
-        composeRule.waitUntil(10_000) { vm.messages.firstOrNull()?.id == 1L }
+        pumpUntil(10_000) { vm.messages.firstOrNull()?.id == 1L }
         settle()
         save("03-chat-first-message")
 
         vm.openGlobalSearch()
         vm.updateSearchQuery("road")
-        composeRule.waitUntil(10_000) { vm.searchResults.isNotEmpty() && !vm.isSearching }
+        pumpUntil(10_000) { vm.searchResults.isNotEmpty() && !vm.isSearching }
         settle()
         save("04-global-search")
 
         vm.openBookmarks()
-        composeRule.waitUntil(10_000) { vm.bookmarksList.isNotEmpty() }
+        pumpUntil(10_000) { vm.bookmarksList.isNotEmpty() }
         settle()
         save("05-bookmarks")
 
         vm.selectChat(chat)
-        composeRule.waitUntil(10_000) { vm.messages.isNotEmpty() }
+        pumpUntil(10_000) { vm.messages.isNotEmpty() }
         vm.openGallery()
-        composeRule.waitUntil(10_000) { vm.galleryMessages.isNotEmpty() }
+        pumpUntil(10_000) { vm.galleryMessages.isNotEmpty() }
         settle()
         save("06-gallery")
     }
