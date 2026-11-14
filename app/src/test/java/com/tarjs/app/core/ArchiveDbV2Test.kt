@@ -172,6 +172,11 @@ class ArchiveDbV2Test {
         assertEquals("Alice", list[0].chatTitle)
         db.removeBookmark(100, 3)
         assertFalse(db.isBookmarked(100, 3))
+        // removing a bookmark must never delete the underlying message or chat
+        val remaining = db.messages(100, limit = 50)
+        assertEquals(10, remaining.size)
+        assertTrue(remaining.any { it.id == 3L })
+        assertEquals(1, db.chats().size)
     }
 
     @Test
