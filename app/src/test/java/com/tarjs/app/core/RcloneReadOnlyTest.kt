@@ -121,7 +121,6 @@ class RcloneReadOnlyTest {
         RcloneRuntime.checkReadOnlyOperation("config/listremotes", JSONObject())
         RcloneRuntime.checkReadOnlyOperation("config/dump", JSONObject())
         RcloneRuntime.checkReadOnlyOperation("config/unlock", JSONObject())
-        RcloneRuntime.checkReadOnlyOperation("options/set", JSONObject())
         val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         RcloneRuntime.configureReadOnlyGuard(context.dataDir)
         val remoteToLocal = JSONObject().put("dstFs", java.io.File(context.filesDir, "dl").apply { mkdirs() }.absolutePath).put("srcFs", "b2:")

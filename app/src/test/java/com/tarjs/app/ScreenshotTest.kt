@@ -56,7 +56,7 @@ class ScreenshotTest {
             val messages = StringBuilder()
             for (i in 1..240) {
                 if (i > 1) messages.append(',')
-                val media = if (i % 15 == 0) """, "photo": "photos/road_trip_$i.jpg", "media_type": "photo", "file_name": "road_trip_$i.jpg"""" else ""
+                val media = if (i % 15 == 0) ", \"photo\": \"photos/road_trip_$i.jpg\", \"media_type\": \"photo\", \"file_name\": \"road_trip_$i.jpg\"" else ""
                 val text = when {
                     i % 15 == 0 -> "road photo from day $i"
                     i % 7 == 0 -> "planning the road trip, day $i"

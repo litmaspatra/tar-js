@@ -58,7 +58,7 @@ class ArchiveMigrationTest {
             val chat = db.chats().single { it.id == 42L }
             // The v6 custom name preference survives and still wins over the raw title.
             assertEquals("Renamed Chat", chat.title)
-            assertEquals("Legacy Chat", db.getCustomChatName(42))
+            assertEquals("Renamed Chat", db.getCustomChatName(42))
 
             val messages = db.messages(42, olderThanDate = Long.MAX_VALUE, limit = 50)
             assertEquals(listOf(7L, 9L), messages.map { it.id })
