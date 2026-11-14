@@ -35,7 +35,7 @@ class MediaDecodingTest {
         val file = fixture("half-half.png", SMALL_PNG_B64)
         val bitmap = decodeSampledBitmap(context, Uri.fromFile(file), 480)
         assertNotNull("production thumbnail decode returned null", bitmap)
-        val android = (bitmap as androidx.compose.ui.graphics.AndroidImageBitmap).bitmap
+        val android = androidx.compose.ui.graphics.asAndroidBitmap(bitmap!!)
         assertEquals(120, android.width)
         assertEquals(90, android.height)
         val left = android.getPixel(10, 45)
