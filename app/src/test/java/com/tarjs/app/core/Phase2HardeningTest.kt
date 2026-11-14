@@ -73,7 +73,7 @@ class Phase2HardeningTest {
         """.trimIndent()
         db.importJson(export) { _, _ -> }
         val search = ChatSearch(db)
-        val stateDeferred = async(StandardTestDispatcher(testScheduler)) { search.search(10, "needle", this) }
+        val stateDeferred = async(StandardTestDispatcher(testScheduler)) { search.search(10, "needle", SearchFilter(), false, this) }
         advanceTimeBy(ChatSearch.DEBOUNCE_MS + 1)
         val state = stateDeferred.await()
         assertNull(state.error)
@@ -82,7 +82,7 @@ class Phase2HardeningTest {
         val window = search.jumpToMessage(10, 1, this)
         assertEquals(3, window.size)
         assertTrue(db.hasNewerMessages(10, window.first().dateUnix))
-        val newer = search.loadNewer(10, 10, this)
+        val newer = search.loadNewer(10, window.first().dateUnix, window.first().id, this)
         assertEquals(listOf("middle", "latest"), newer.map { it.text })
     }
 
