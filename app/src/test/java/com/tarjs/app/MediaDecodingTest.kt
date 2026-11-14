@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Color
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.tarjs.app.core.MediaResolver
 import java.io.File
@@ -35,7 +36,7 @@ class MediaDecodingTest {
         val file = fixture("half-half.png", SMALL_PNG_B64)
         val bitmap = decodeSampledBitmap(context, Uri.fromFile(file), 480)
         assertNotNull("production thumbnail decode returned null", bitmap)
-        val android = androidx.compose.ui.graphics.asAndroidBitmap(bitmap!!)
+        val android = bitmap!!.asAndroidBitmap()
         assertEquals(120, android.width)
         assertEquals(90, android.height)
         val left = android.getPixel(10, 45)
