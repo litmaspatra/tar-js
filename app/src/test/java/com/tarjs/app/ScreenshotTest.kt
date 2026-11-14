@@ -2,10 +2,9 @@ package com.tarjs.app
 
 import android.content.Context
 import android.graphics.Bitmap
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.test.captureToImage
+import android.graphics.Canvas
+import android.view.ViewGroup
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
-import androidx.compose.ui.test.onRoot
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -86,8 +85,18 @@ class ScreenshotTest {
     private fun save(name: String) {
         composeRule.waitForIdle()
         val dir = File(System.getenv("SCREENSHOT_DIR") ?: "build/screenshots").also { it.mkdirs() }
-        val bitmap = composeRule.onRoot().captureToImage().asAndroidBitmap()
-        FileOutputStream(File(dir, "$name.png")).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        val file = File(dir, "$name.png")
+        // captureToImage() relies on hardware window capture, which never completes under
+        // Robolectric; drawing the content view into a software bitmap works with
+        // GraphicsMode NATIVE (real Skia rendering).
+        scenario.onActivity { activity ->
+            val view = activity.window.decorView.findViewById<ViewGroup>(android.R.id.content)
+            check(view.width > 0 && view.height > 0) { "content view not laid out for $name" }
+            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(bitmap))
+            FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        check(file.length() > 0) { "screenshot $name empty" }
     }
 
     private fun settle() {
