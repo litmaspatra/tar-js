@@ -9,7 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * Chat-scoped search with bidirectional paging.
+ * Chat-scoped and archive-wide search with bidirectional paging.
  * Runs all database work off-thread, debounces input and cancels stale searches.
  */
 class ChatSearch(private val db: ArchiveDb) {
@@ -19,14 +19,19 @@ class ChatSearch(private val db: ArchiveDb) {
         val results: List<Message>,
         val isLoading: Boolean,
         val error: String? = null,
-        val hasOlder: Boolean = false,
-        val hasNewer: Boolean = false
+        val hasMore: Boolean = false
     )
 
     @Volatile
     private var activeSearch: Deferred<SearchState>? = null
 
-    suspend fun search(chatId: Long, query: String, scope: CoroutineScope): SearchState {
+    suspend fun search(
+        chatId: Long?,
+        query: String,
+        filter: SearchFilter,
+        newestFirst: Boolean,
+        scope: CoroutineScope
+    ): SearchState {
         val normalized = query.trim()
         activeSearch?.cancel()
         if (normalized.isEmpty()) {
@@ -37,16 +42,8 @@ class ChatSearch(private val db: ArchiveDb) {
             delay(DEBOUNCE_MS)
             withContext(Dispatchers.IO) {
                 runCatching {
-                    val results = db.searchMessages(chatId, normalized, SEARCH_LIMIT)
-                    val firstDate = results.firstOrNull()?.dateUnix
-                    val lastDate = results.lastOrNull()?.dateUnix
-                    SearchState(
-                        query = normalized,
-                        results = results,
-                        isLoading = false,
-                        hasOlder = firstDate?.let { db.hasOlderMessages(chatId, it) } ?: false,
-                        hasNewer = lastDate?.let { db.hasNewerMessages(chatId, it) } ?: false
-                    )
+                    val results = db.searchMessages(chatId, normalized, filter, newestFirst, SEARCH_LIMIT, 0)
+                    SearchState(normalized, results, isLoading = false, hasMore = results.size == SEARCH_LIMIT)
                 }.getOrElse { error ->
                     SearchState(normalized, emptyList(), isLoading = false, error = error.userFacingMessage("Search failed"))
                 }
@@ -62,19 +59,52 @@ class ChatSearch(private val db: ArchiveDb) {
         }
     }
 
-    suspend fun loadOlder(chatId: Long, beforeDate: Long, scope: CoroutineScope): List<Message> =
+    data class SearchPage(val results: List<Message>, val hasMore: Boolean)
+
+    suspend fun searchPage(
+        chatId: Long?,
+        query: String,
+        filter: SearchFilter,
+        newestFirst: Boolean,
+        offset: Int,
+        scope: CoroutineScope
+    ): SearchPage = scope.async(Dispatchers.IO) {
+        val rows = db.searchMessages(chatId, query.trim(), filter, newestFirst, SEARCH_LIMIT, offset)
+        SearchPage(rows, rows.size == SEARCH_LIMIT)
+    }.await()
+
+    suspend fun loadOlder(chatId: Long, beforeDate: Long, beforeMessageId: Long, scope: CoroutineScope): List<Message> =
         scope.async(Dispatchers.IO) {
-            db.messages(chatId = chatId, olderThanDate = beforeDate, limit = PAGE_SIZE)
+            db.messages(chatId = chatId, olderThanDate = beforeDate, olderThanMessageId = beforeMessageId, limit = PAGE_SIZE)
         }.await()
 
-    suspend fun loadNewer(chatId: Long, afterDate: Long, scope: CoroutineScope): List<Message> =
+    suspend fun loadNewer(chatId: Long, afterDate: Long, afterMessageId: Long, scope: CoroutineScope): List<Message> =
         scope.async(Dispatchers.IO) {
-            db.messages(chatId = chatId, newerThanDate = afterDate, limit = PAGE_SIZE)
+            db.messages(chatId = chatId, newerThanDate = afterDate, newerThanMessageId = afterMessageId, limit = PAGE_SIZE)
         }.await()
 
     suspend fun jumpToMessage(chatId: Long, messageId: Long, scope: CoroutineScope): List<Message> =
         scope.async(Dispatchers.IO) {
             db.messageWindow(chatId, messageId, before = WINDOW_HALF, after = WINDOW_HALF)
+        }.await()
+
+    /** Window around the first message on or after [dateUnix]; the latest message when the date is past the end. */
+    suspend fun jumpToDate(chatId: Long, dateUnix: Long, scope: CoroutineScope): List<Message> =
+        scope.async(Dispatchers.IO) {
+            val target = db.firstMessageOnOrAfter(chatId, dateUnix) ?: db.lastMessage(chatId) ?: return@async emptyList()
+            db.messageWindow(chatId, target.id, before = WINDOW_HALF, after = WINDOW_HALF)
+        }.await()
+
+    suspend fun jumpToFirst(chatId: Long, scope: CoroutineScope): List<Message> =
+        scope.async(Dispatchers.IO) {
+            val target = db.firstMessage(chatId) ?: return@async emptyList()
+            db.messageWindow(chatId, target.id, before = 0, after = 2 * WINDOW_HALF)
+        }.await()
+
+    suspend fun jumpToLatest(chatId: Long, scope: CoroutineScope): List<Message> =
+        scope.async(Dispatchers.IO) {
+            val target = db.lastMessage(chatId) ?: return@async emptyList()
+            db.messageWindow(chatId, target.id, before = 2 * WINDOW_HALF, after = 0)
         }.await()
 
     fun cancel() {

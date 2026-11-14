@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 package com.tarjs.app
 
@@ -32,6 +32,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
@@ -198,6 +203,8 @@ fun TarApp(vm: TarVm = viewModel()) {
             NavigationScreen.ChatSearch -> ChatSearchScreen(vm)
             NavigationScreen.ProfilePhoto -> ProfilePhotoScreen(vm, onPickAnother = { avatarPicker.launch(arrayOf("image/*")) })
             NavigationScreen.Settings -> SettingsScreen(vm)
+            NavigationScreen.Bookmarks -> BookmarksScreen(vm)
+            NavigationScreen.Gallery -> GalleryScreen(vm)
             }
         }
         if (vm.importPhase in setOf("downloading", "indexing") && effectiveScreen != NavigationScreen.ImportProgress) {
@@ -313,6 +320,8 @@ private fun HomeScreen(vm: TarVm) {
             TopAppBar(
                 title = { Text("TAR-JS", fontWeight = FontWeight.Bold) },
                 actions = {
+                    IconButton(onClick = vm::openGlobalSearch) { Icon(Icons.Default.Search, "Search all chats") }
+                    IconButton(onClick = vm::openBookmarks) { Icon(Icons.Default.Bookmarks, "Saved messages") }
                     IconButton(onClick = { vm.navigateTo(NavigationScreen.Settings) }) { Icon(Icons.Default.Settings, "Settings") }
                     if (vm.isPasscodeConfigured()) {
                         IconButton(onClick = vm::lockNow) { Icon(Icons.Default.Lock, "Lock") }
@@ -332,8 +341,34 @@ private fun HomeScreen(vm: TarVm) {
                 Button(onClick = vm::openSourcePicker) { Text("Add your chats") }
             }
         } else {
-            LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
-                items(vm.chats, key = { it.id }) { chat -> ChatRow(vm, chat) { vm.selectChat(chat) } }
+            Column(Modifier.padding(pad).fillMaxSize()) {
+                vm.indexNotice?.let { notice ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = vm::dismissIndexNotice) { Text("OK") }
+                        }
+                    }
+                }
+                var chatFilter by remember { mutableStateOf("") }
+                if (vm.chats.size > 6) {
+                    OutlinedTextField(
+                        value = chatFilter,
+                        onValueChange = { chatFilter = it },
+                        placeholder = { Text("Filter chats") },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+                val visibleChats = if (chatFilter.isBlank()) vm.chats else vm.chats.filter { it.title.contains(chatFilter.trim(), ignoreCase = true) }
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
+                    items(visibleChats, key = { it.id }) { chat -> ChatRow(vm, chat) { vm.selectChat(chat) } }
+                }
             }
         }
     }
@@ -502,8 +537,23 @@ private fun ImportProgressScreen(vm: TarVm) {
 @Composable
 private fun ChatScreen(vm: TarVm, onPickPhoto: () -> Unit) {
     val chat = vm.selectedChat ?: return
+    val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+
+    fun openDateJumpPicker() {
+        val now = java.util.Calendar.getInstance()
+        android.app.DatePickerDialog(
+            context,
+            { _, year, month, day ->
+                val epoch = java.time.LocalDate.of(year, month + 1, day).atStartOfDay(java.time.ZoneId.systemDefault()).toEpochSecond()
+                vm.jumpToDate(epoch)
+            },
+            now.get(java.util.Calendar.YEAR),
+            now.get(java.util.Calendar.MONTH),
+            now.get(java.util.Calendar.DAY_OF_MONTH)
+        ).show()
+    }
     val focus = vm.focusMessageId
     var initialPositioned by remember(chat.id) { mutableStateOf(false) }
     LaunchedEffect(vm.messages, focus) {
@@ -521,6 +571,21 @@ private fun ChatScreen(vm: TarVm, onPickPhoto: () -> Unit) {
             }
         }
     }
+    LaunchedEffect(listState, chat.id) {
+        var lastSavedAt = 0L
+        snapshotFlow { listState.firstVisibleItemIndex to (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) }.collect { (first, last) ->
+            if (first <= 2 && vm.hasOlder) vm.loadOlderMessages(chat.id)
+            val total = listState.layoutInfo.totalItemsCount
+            if (total > 0 && last >= total - 2 && vm.hasNewer) vm.loadNewerMessages(chat.id)
+            val messageIndex = first - (if (vm.hasOlder) 1 else 0)
+            val message = vm.messages.getOrNull(messageIndex)
+            val now = System.currentTimeMillis()
+            if (message != null && now - lastSavedAt > 500L) {
+                lastSavedAt = now
+                vm.saveReadingPosition(message)
+            }
+        }
+    }
     BackHandler { vm.openHome() }
     Scaffold(
         modifier = Modifier.padding(WindowInsets.safeDrawing.asPaddingValues()),
@@ -532,6 +597,10 @@ private fun ChatScreen(vm: TarVm, onPickPhoto: () -> Unit) {
                     IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "More") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("Search this chat") }, leadingIcon = { Icon(Icons.Default.Search, null) }, onClick = { menu = false; vm.openChatSearch() })
+                        DropdownMenuItem(text = { Text("Jump to date") }, leadingIcon = { Icon(Icons.Default.DateRange, null) }, onClick = { menu = false; openDateJumpPicker() })
+                        DropdownMenuItem(text = { Text("First message") }, leadingIcon = { Icon(Icons.Default.FirstPage, null) }, onClick = { menu = false; vm.jumpToFirst() })
+                        DropdownMenuItem(text = { Text("Latest message") }, leadingIcon = { Icon(Icons.Default.LastPage, null) }, onClick = { menu = false; vm.jumpToLatest() })
+                        DropdownMenuItem(text = { Text("Media gallery") }, leadingIcon = { Icon(Icons.Default.PhotoLibrary, null) }, onClick = { menu = false; vm.openGallery() })
                         DropdownMenuItem(text = { Text("Swap sides") }, leadingIcon = { Icon(Icons.Default.SwapHoriz, null) }, onClick = { menu = false; vm.toggleSwapSides(chat.id) })
                         DropdownMenuItem(text = { Text("Set profile photo") }, leadingIcon = { Icon(Icons.Default.AddAPhoto, null) }, onClick = { menu = false; onPickPhoto() })
                         DropdownMenuItem(text = { Text("Settings") }, leadingIcon = { Icon(Icons.Default.Settings, null) }, onClick = { menu = false; vm.navigateTo(NavigationScreen.Settings) })
@@ -607,7 +676,11 @@ private fun MessageBubble(vm: TarVm, message: Message, right: Boolean) {
         }
         return
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (right) Arrangement.End else Arrangement.Start) {
+    val bookmarked = message.id in vm.bookmarkedIds
+    Row(
+        Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { vm.toggleBookmark(message) }),
+        horizontalArrangement = if (right) Arrangement.End else Arrangement.Start
+    ) {
         val bubbleColor = if (right) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
         val contentColor = if (right) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
         val accentColor = if (right) contentColor.copy(alpha = 0.86f) else MaterialTheme.colorScheme.primary
@@ -633,6 +706,10 @@ private fun MessageBubble(vm: TarVm, message: Message, right: Boolean) {
                 if (message.mediaPath != null) MessageMedia(vm, message)
                 if (message.text.isNotBlank()) Text(message.text, style = MaterialTheme.typography.bodyMedium)
                 Row(Modifier.align(Alignment.End).padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (bookmarked) {
+                        Icon(Icons.Default.Star, null, Modifier.size(12.dp), tint = contentColor.copy(alpha = 0.8f))
+                        Spacer(Modifier.width(3.dp))
+                    }
                     if (message.isEdited) Text("edited · ", style = MaterialTheme.typography.labelSmall, color = contentColor.copy(alpha = 0.68f))
                     Text(formatMessageTime(message), style = MaterialTheme.typography.labelSmall, color = contentColor.copy(alpha = 0.68f))
                 }
@@ -792,36 +869,227 @@ private fun OpenMediaButton(uri: Uri, label: String, mimeType: String) {
 
 @Composable
 private fun ChatSearchScreen(vm: TarVm) {
-    val chat = vm.selectedChat ?: return
-    BackHandler { vm.navigateTo(NavigationScreen.Chat) }
+    val chat = vm.selectedChat
+    val global = vm.searchGlobal
+    if (!global && chat == null) return
+    val context = LocalContext.current
+    var mediaMenu by remember { mutableStateOf(false) }
+
+    fun pickDate(onPicked: (Long) -> Unit) {
+        val now = java.util.Calendar.getInstance()
+        android.app.DatePickerDialog(
+            context,
+            { _, year, month, day ->
+                val epoch = java.time.LocalDate.of(year, month + 1, day).atStartOfDay(java.time.ZoneId.systemDefault()).toEpochSecond()
+                onPicked(epoch)
+            },
+            now.get(java.util.Calendar.YEAR),
+            now.get(java.util.Calendar.MONTH),
+            now.get(java.util.Calendar.DAY_OF_MONTH)
+        ).show()
+    }
+
+    BackHandler { vm.navigateTo(if (global) NavigationScreen.Home else NavigationScreen.Chat) }
     Scaffold(
         modifier = Modifier.padding(WindowInsets.safeDrawing.asPaddingValues()),
-        topBar = { TopAppBar(title = { Text("Search ${chat.title}") }, navigationIcon = { IconButton(onClick = { vm.navigateTo(NavigationScreen.Chat) }) { Icon(Icons.Default.ArrowBack, "Back") } }) }
+        topBar = {
+            TopAppBar(
+                title = { Text(if (global) "Search all chats" else "Search ${chat?.title.orEmpty()}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = { IconButton(onClick = { vm.navigateTo(if (global) NavigationScreen.Home else NavigationScreen.Chat) }) { Icon(Icons.Default.ArrowBack, "Back") } }
+            )
+        }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             OutlinedTextField(
                 value = vm.searchQuery,
-                onValueChange = { vm.search(it, chat.id) },
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                placeholder = { Text("Search this chat") },
+                onValueChange = vm::updateSearchQuery,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                placeholder = { Text(if (global) "Search every imported chat" else "Search this chat") },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 singleLine = true
             )
+            val filter = vm.searchFilter
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = filter.sender.orEmpty(),
+                    onValueChange = { vm.updateSearchFilter(filter.copy(sender = it.ifBlank { null })) },
+                    label = { Text("Sender") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                Box {
+                    TextButton(onClick = { mediaMenu = true }) { Text(mediaLabel(filter)) }
+                    DropdownMenu(expanded = mediaMenu, onDismissRequest = { mediaMenu = false }) {
+                        DropdownMenuItem(text = { Text("Everything") }, onClick = { mediaMenu = false; vm.updateSearchFilter(filter.copy(mediaType = null, mediaOnly = false)) })
+                        DropdownMenuItem(text = { Text("Any media") }, onClick = { mediaMenu = false; vm.updateSearchFilter(filter.copy(mediaType = null, mediaOnly = true)) })
+                        listOf("photo" to "Photos", "video" to "Videos", "voice" to "Voice notes", "audio" to "Audio", "file" to "Files", "sticker" to "Stickers").forEach { (value, label) ->
+                            DropdownMenuItem(text = { Text(label) }, onClick = { mediaMenu = false; vm.updateSearchFilter(filter.copy(mediaType = value, mediaOnly = false)) })
+                        }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { pickDate { epoch -> vm.updateSearchFilter(vm.searchFilter.copy(afterDate = epoch)) } }) {
+                    Text(filter.afterDate?.let { "From " + formatDay(it) } ?: "From date")
+                }
+                TextButton(onClick = { pickDate { epoch -> vm.updateSearchFilter(vm.searchFilter.copy(beforeDate = epoch + 86399L)) } }) {
+                    Text(filter.beforeDate?.let { "To " + formatDay(it) } ?: "To date")
+                }
+                if (filter.sender != null || filter.afterDate != null || filter.beforeDate != null || filter.mediaType != null || filter.mediaOnly) {
+                    TextButton(onClick = { vm.updateSearchFilter(SearchFilter()) }) { Text("Clear") }
+                }
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = vm::toggleSearchOrder) { Text(if (vm.searchNewestFirst) "Newest first" else "Oldest first") }
+            }
             if (vm.isSearching) LinearProgressIndicator(Modifier.fillMaxWidth())
             vm.searchError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
             LazyColumn(Modifier.fillMaxSize()) {
                 items(vm.searchResults, key = { "${it.chatId}-${it.id}" }) { result ->
                     ListItem(
-                        headlineContent = { Text(result.sender.ifBlank { chat.title }) },
+                        headlineContent = { Text((if (global) vm.chatTitleFor(result.chatId) + " - " else "") + result.sender.ifBlank { chat?.title.orEmpty() }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         supportingContent = { Text(result.text.ifBlank { result.fileName ?: "Media" }, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                         trailingContent = { Text(formatMessageTime(result), style = MaterialTheme.typography.labelSmall) },
                         modifier = Modifier.clickable { vm.jumpToSearchResult(result) }
+                    )
+                }
+                if (vm.searchHasMore) {
+                    item { TextButton(onClick = vm::loadMoreSearchResults, modifier = Modifier.fillMaxWidth()) { Text("Load more results") } }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookmarksScreen(vm: TarVm) {
+    BackHandler { vm.openHome() }
+    Scaffold(
+        modifier = Modifier.padding(WindowInsets.safeDrawing.asPaddingValues()),
+        topBar = { TopAppBar(title = { Text("Saved messages") }, navigationIcon = { IconButton(onClick = vm::openHome) { Icon(Icons.Default.ArrowBack, "Back") } }) }
+    ) { pad ->
+        if (vm.bookmarksList.isEmpty()) {
+            Column(Modifier.padding(pad).padding(24.dp)) {
+                Text("No saved messages yet.", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                Text("Long-press any message in a chat to bookmark it here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(Modifier.padding(pad).fillMaxSize()) {
+                items(vm.bookmarksList, key = { "${it.message.chatId}-${it.message.id}" }) { bookmark ->
+                    ListItem(
+                        headlineContent = { Text(bookmark.chatTitle + " - " + bookmark.message.sender.ifBlank { "Message" }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        supportingContent = { Text(bookmark.message.text.ifBlank { bookmark.message.fileName ?: "Media" }, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                        trailingContent = { IconButton(onClick = { vm.removeBookmark(bookmark.message) }) { Icon(Icons.Default.Delete, "Remove") } },
+                        modifier = Modifier.clickable { vm.openBookmarkedMessage(bookmark) }
                     )
                 }
             }
         }
     }
 }
+
+@Composable
+private fun GalleryScreen(vm: TarVm) {
+    val chat = vm.selectedChat ?: return
+    BackHandler { vm.navigateTo(NavigationScreen.Chat) }
+    Scaffold(
+        modifier = Modifier.padding(WindowInsets.safeDrawing.asPaddingValues()),
+        topBar = { TopAppBar(title = { Text("Media - ${chat.title}", maxLines = 1, overflow = TextOverflow.Ellipsis) }, navigationIcon = { IconButton(onClick = { vm.navigateTo(NavigationScreen.Chat) }) { Icon(Icons.Default.ArrowBack, "Back") } }) }
+    ) { pad ->
+        if (vm.galleryMessages.isEmpty() && !vm.galleryLoading) {
+            Column(Modifier.padding(pad).padding(24.dp)) { Text("No media in this chat yet.") }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 120.dp),
+                modifier = Modifier.padding(pad).fillMaxSize(),
+                contentPadding = PaddingValues(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                gridItems(vm.galleryMessages, key = { it.id }) { message -> GalleryCell(vm, message) }
+                if (vm.galleryHasMore || vm.galleryLoading) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        if (vm.galleryLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                        else TextButton(onClick = vm::loadMoreGallery, modifier = Modifier.fillMaxWidth()) { Text("Load more") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryCell(vm: TarVm, message: Message) {
+    val path = message.mediaPath ?: return
+    val context = LocalContext.current
+    val isImage = message.mediaType in setOf("photo", "sticker")
+    var bitmap by remember(path) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var resolved by remember(path) { mutableStateOf(false) }
+    LaunchedEffect(path) {
+        val uri = if (isImage) vm.resolveMediaUri(path) else null
+        bitmap = if (uri != null) withContext(Dispatchers.IO) { decodeSampledBitmap(context, uri, 480) } else null
+        resolved = true
+    }
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        tonalElevation = 1.dp,
+        modifier = Modifier.aspectRatio(1f).clickable { vm.openMessageFromGallery(message) }
+    ) {
+        when {
+            bitmap != null -> Image(bitmap!!, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            isImage && !resolved -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) }
+            else -> Column(
+                Modifier.fillMaxSize().padding(8.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    when (message.mediaType) {
+                        "video" -> Icons.Default.PlayCircle
+                        "voice", "audio" -> Icons.Default.Mic
+                        "sticker" -> Icons.Default.EmojiEmotions
+                        "photo" -> Icons.Default.BrokenImage
+                        else -> Icons.Default.InsertDriveFile
+                    },
+                    null,
+                    Modifier.size(28.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    message.fileName ?: message.mediaType ?: "Media",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+private fun decodeSampledBitmap(context: Context, uri: Uri, maxDimension: Int): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, maxDimension, maxDimension)
+    }
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }?.asImageBitmap()
+}.getOrNull()
+
+private fun mediaLabel(filter: SearchFilter): String = when {
+    filter.mediaType == "photo" -> "Photos"
+    filter.mediaType == "video" -> "Videos"
+    filter.mediaType == "voice" -> "Voice notes"
+    filter.mediaType == "audio" -> "Audio"
+    filter.mediaType == "file" -> "Files"
+    filter.mediaType == "sticker" -> "Stickers"
+    filter.mediaOnly -> "Any media"
+    else -> "Everything"
+}
+
+private fun formatDay(epochSeconds: Long): String =
+    SimpleDateFormat("d MMM yyyy", Locale.getDefault()).format(Date(epochSeconds * 1000))
 
 @Composable
 private fun ProfilePhotoScreen(vm: TarVm, onPickAnother: () -> Unit) {
@@ -875,6 +1143,14 @@ private fun SettingsScreen(vm: TarVm) {
     val chat = vm.selectedChat
     val appearance = LocalAppearanceState.current
     var customName by remember(chat?.id) { mutableStateOf(chat?.title.orEmpty()) }
+    var exportPassphrase by remember { mutableStateOf("") }
+    var restorePassphrase by remember { mutableStateOf("") }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        if (uri != null) vm.exportBackup(uri, exportPassphrase.ifBlank { null })
+    }
+    val restoreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.restoreBackup(uri, restorePassphrase.ifBlank { null })
+    }
     BackHandler { vm.navigateTo(if (chat != null) NavigationScreen.Chat else NavigationScreen.Home) }
     Scaffold(
         modifier = Modifier.padding(WindowInsets.safeDrawing.asPaddingValues()),
@@ -925,6 +1201,43 @@ private fun SettingsScreen(vm: TarVm) {
                     supportingContent = { Text(if (vm.hasRememberedRclonePassword()) "Saved securely with Android Keystore" else "Not saved") },
                     trailingContent = { if (vm.hasRememberedRclonePassword()) TextButton(onClick = vm::forgetRclonePassword) { Text("Forget") } }
                 )
+            }
+            item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
+            item {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Backup", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Optional. Encrypted with your passphrase when one is set. Restoring replaces the archive currently on this phone.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        exportPassphrase,
+                        { exportPassphrase = it },
+                        label = { Text("Backup passphrase (optional)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(onClick = { exportLauncher.launch("tarjs-backup.tarjsbak") }, enabled = !vm.backupBusy, modifier = Modifier.padding(top = 8.dp)) { Text("Export backup") }
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        restorePassphrase,
+                        { restorePassphrase = it },
+                        label = { Text("Restore passphrase (if set)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(
+                        onClick = { restoreLauncher.launch(arrayOf("*/*")) },
+                        enabled = !vm.backupBusy && vm.importPhase !in setOf("downloading", "indexing"),
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) { Text("Restore backup") }
+                    if (vm.backupBusy) LinearProgressIndicator(Modifier.padding(top = 12.dp).fillMaxWidth())
+                    vm.backupMessage?.let { Text(it, modifier = Modifier.padding(top = 8.dp)) }
+                }
             }
             if (chat != null) item {
                 Column(Modifier.padding(16.dp)) {

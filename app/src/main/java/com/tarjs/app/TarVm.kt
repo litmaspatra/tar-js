@@ -22,7 +22,7 @@ import kotlinx.coroutines.withContext
 
 enum class NavigationScreen {
     Welcome, Lock, SourcePicker, RcloneConfig, SafBrowser,
-    ImportProgress, Home, Chat, ChatSearch, ProfilePhoto, Settings
+    ImportProgress, Home, Chat, ChatSearch, ProfilePhoto, Settings, Bookmarks, Gallery
 }
 
 class TarVm : ViewModel() {
@@ -69,6 +69,32 @@ class TarVm : ViewModel() {
         private set
     var searchError: String? by mutableStateOf(null)
         private set
+    var searchGlobal by mutableStateOf(false)
+        private set
+    var searchFilter by mutableStateOf(SearchFilter())
+        private set
+    var searchNewestFirst by mutableStateOf(false)
+        private set
+    var searchHasMore by mutableStateOf(false)
+        private set
+    var indexNotice by mutableStateOf<String?>(null)
+        private set
+    var bookmarkedIds by mutableStateOf<Set<Long>>(emptySet())
+        private set
+    var bookmarksList by mutableStateOf<List<BookmarkedMessage>>(emptyList())
+        private set
+    var galleryMessages by mutableStateOf<List<Message>>(emptyList())
+        private set
+    var galleryHasMore by mutableStateOf(false)
+        private set
+    var galleryLoading by mutableStateOf(false)
+        private set
+    var backupBusy by mutableStateOf(false)
+        private set
+    var backupMessage by mutableStateOf<String?>(null)
+
+    private var pagingOlder = false
+    private var pagingNewer = false
 
     var importProgress by mutableIntStateOf(0)
         private set
@@ -122,6 +148,10 @@ class TarVm : ViewModel() {
         lockState = lock.state
         failureCount = lock.failureCount
         chats = db.chats()
+        viewModelScope.launch {
+            val rebuilt = withContext(Dispatchers.IO) { db.ensureSearchIndex() }
+            if (rebuilt) indexNotice = "Search index repaired - full history is searchable again"
+        }
         rcloneConfigPath = appContext.getSharedPreferences("rclone-state", Context.MODE_PRIVATE).getString("configPath", null)
         rcloneEncrypted = rcloneConfigPath?.let { path ->
             runCatching { configManager.isEncrypted(File(path).readText(Charsets.UTF_8)) }.getOrDefault(false)
@@ -216,17 +246,34 @@ class TarVm : ViewModel() {
         searchQuery = ""
         searchResults = emptyList()
         viewModelScope.launch {
-            val pair = withContext(Dispatchers.IO) {
-                val page = db.messages(chat.id, olderThanDate = Long.MAX_VALUE, limit = 120)
-                val swap = db.getSwapSides(chat.id)
-                page to swap
+            val triple = withContext(Dispatchers.IO) {
+                val saved = db.readingPosition(chat.id)
+                val page = if (saved != null) {
+                    db.messageWindow(chat.id, saved.first, before = 80, after = 80)
+                } else {
+                    db.messages(chat.id, olderThanDate = Long.MAX_VALUE, limit = 120)
+                }
+                Triple(page, db.getSwapSides(chat.id), saved)
             }
-            messages = pair.first
-            swapped = pair.second
+            messages = triple.first
+            swapped = triple.second
+            focusMessageId = triple.third?.first
+            bookmarkedIds = withContext(Dispatchers.IO) { db.bookmarkedIds(chat.id) }
             updatePageFlags()
             screen = NavigationScreen.Chat
         }
     }
+
+    fun saveReadingPosition(message: Message) {
+        val chat = selectedChat ?: return
+        if (message.chatId != chat.id) return
+        viewModelScope.launch(Dispatchers.IO) { db.setReadingPosition(chat.id, message.id, message.dateUnix) }
+    }
+
+    fun dismissIndexNotice() { indexNotice = null }
+
+    fun chatTitleFor(chatId: Long): String = chats.firstOrNull { it.id == chatId }?.title ?: "Chat " + chatId.toString()
+
 
     fun toggleSwapSides(chatId: Long) {
         val next = !swapped
@@ -235,69 +282,161 @@ class TarVm : ViewModel() {
     }
 
     fun openChatSearch() {
-        searchQuery = ""
-        searchResults = emptyList()
-        searchError = null
+        resetSearch(global = false)
         screen = NavigationScreen.ChatSearch
     }
 
-    fun search(query: String, chatId: Long) {
+    fun openGlobalSearch() {
+        resetSearch(global = true)
+        screen = NavigationScreen.ChatSearch
+    }
+
+    private fun resetSearch(global: Boolean) {
+        searchGlobal = global
+        searchQuery = ""
+        searchResults = emptyList()
+        searchError = null
+        searchFilter = SearchFilter()
+        searchNewestFirst = false
+        searchHasMore = false
+    }
+
+    fun updateSearchQuery(query: String) {
         searchQuery = query
+        runSearch()
+    }
+
+    fun updateSearchFilter(filter: SearchFilter) {
+        searchFilter = filter
+        runSearch()
+    }
+
+    fun toggleSearchOrder() {
+        searchNewestFirst = !searchNewestFirst
+        runSearch()
+    }
+
+    private fun runSearch() {
+        val query = searchQuery
         searchError = null
         searchJob?.cancel()
         if (query.isBlank()) {
             searchResults = emptyList()
+            searchHasMore = false
             isSearching = false
             chatSearch.cancel()
             return
         }
         isSearching = true
+        val chatId = if (searchGlobal) null else selectedChat?.id
+        val filter = searchFilter
+        val newestFirst = searchNewestFirst
         searchJob = viewModelScope.launch {
-            val state = chatSearch.search(chatId, query, viewModelScope)
+            val state = chatSearch.search(chatId, query, filter, newestFirst, viewModelScope)
             if (searchQuery.trim() == state.query) {
                 searchResults = state.results
+                searchHasMore = state.hasMore
                 searchError = state.error
                 isSearching = false
             }
         }
     }
 
+    fun loadMoreSearchResults() {
+        if (!searchHasMore || isSearching) return
+        val chatId = if (searchGlobal) null else selectedChat?.id
+        val offset = searchResults.size
+        isSearching = true
+        searchJob = viewModelScope.launch {
+            val page = chatSearch.searchPage(chatId, searchQuery, searchFilter, searchNewestFirst, offset, viewModelScope)
+            searchResults = (searchResults + page.results).distinctBy { "${it.chatId}-${it.id}" }
+            searchHasMore = page.hasMore
+            isSearching = false
+        }
+    }
+
     fun jumpToSearchResult(message: Message) {
-        val chat = selectedChat ?: return
+        val chat = selectedChat?.takeIf { it.id == message.chatId }
+            ?: chats.firstOrNull { it.id == message.chatId } ?: return
+        selectedChat = chat
         viewModelScope.launch {
             messages = chatSearch.jumpToMessage(chat.id, message.id, viewModelScope)
             focusMessageId = message.id
+            swapped = withContext(Dispatchers.IO) { db.getSwapSides(chat.id) }
+            bookmarkedIds = withContext(Dispatchers.IO) { db.bookmarkedIds(chat.id) }
             updatePageFlags()
             screen = NavigationScreen.Chat
         }
     }
 
-    fun loadOlderMessages(chatId: Long) {
-        val before = messages.firstOrNull()?.dateUnix ?: return
+    fun jumpToDate(dateUnix: Long) {
+        val chat = selectedChat ?: return
         viewModelScope.launch {
-            val older = chatSearch.loadOlder(chatId, before, viewModelScope)
+            val window = chatSearch.jumpToDate(chat.id, dateUnix, viewModelScope)
+            if (window.isNotEmpty()) {
+                messages = window
+                focusMessageId = window.firstOrNull { it.dateUnix >= dateUnix }?.id ?: window.lastOrNull()?.id
+                updatePageFlags()
+            }
+        }
+    }
+
+    fun jumpToFirst() {
+        val chat = selectedChat ?: return
+        viewModelScope.launch {
+            val window = chatSearch.jumpToFirst(chat.id, viewModelScope)
+            if (window.isNotEmpty()) {
+                messages = window
+                focusMessageId = window.firstOrNull()?.id
+                updatePageFlags()
+            }
+        }
+    }
+
+    fun jumpToLatest() {
+        val chat = selectedChat ?: return
+        viewModelScope.launch {
+            val window = chatSearch.jumpToLatest(chat.id, viewModelScope)
+            if (window.isNotEmpty()) {
+                messages = window
+                focusMessageId = window.lastOrNull()?.id
+                updatePageFlags()
+            }
+        }
+    }
+
+    fun loadOlderMessages(chatId: Long) {
+        val first = messages.firstOrNull() ?: return
+        if (pagingOlder) return
+        pagingOlder = true
+        viewModelScope.launch {
+            val older = chatSearch.loadOlder(chatId, first.dateUnix, first.id, viewModelScope)
             messages = (older + messages).distinctBy { it.id }
+            pagingOlder = false
             updatePageFlags()
         }
     }
 
     fun loadNewerMessages(chatId: Long) {
-        val after = messages.lastOrNull()?.dateUnix ?: return
+        val last = messages.lastOrNull() ?: return
+        if (pagingNewer) return
+        pagingNewer = true
         viewModelScope.launch {
-            val newer = chatSearch.loadNewer(chatId, after, viewModelScope)
+            val newer = chatSearch.loadNewer(chatId, last.dateUnix, last.id, viewModelScope)
             messages = (messages + newer).distinctBy { it.id }
+            pagingNewer = false
             updatePageFlags()
         }
     }
 
     private fun updatePageFlags() {
         val chat = selectedChat ?: return
-        val first = messages.firstOrNull()?.dateUnix
-        val last = messages.lastOrNull()?.dateUnix
+        val first = messages.firstOrNull()
+        val last = messages.lastOrNull()
         viewModelScope.launch {
             val flags = withContext(Dispatchers.IO) {
-                (first?.let { db.hasOlderMessages(chat.id, it) } ?: false) to
-                    (last?.let { db.hasNewerMessages(chat.id, it) } ?: false)
+                (first?.let { db.hasOlderMessages(chat.id, it.dateUnix, it.id) } ?: false) to
+                    (last?.let { db.hasNewerMessages(chat.id, it.dateUnix, it.id) } ?: false)
             }
             hasOlder = flags.first
             hasNewer = flags.second
@@ -401,6 +540,121 @@ class TarVm : ViewModel() {
         passwordManager.forgetPassword()
         sessionRclonePassword = null
         rcloneNeedsPassword = rcloneEncrypted
+    }
+
+    fun toggleBookmark(message: Message) {
+        val chat = selectedChat ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (db.isBookmarked(chat.id, message.id)) db.removeBookmark(chat.id, message.id)
+            else db.addBookmark(chat.id, message.id)
+            bookmarkedIds = db.bookmarkedIds(chat.id)
+        }
+    }
+
+    fun removeBookmark(message: Message) {
+        viewModelScope.launch(Dispatchers.IO) {
+            db.removeBookmark(message.chatId, message.id)
+            bookmarkedIds = db.bookmarkedIds(message.chatId)
+            bookmarksList = db.bookmarks()
+        }
+    }
+
+    fun openBookmarks() {
+        viewModelScope.launch {
+            bookmarksList = withContext(Dispatchers.IO) { db.bookmarks() }
+            screen = NavigationScreen.Bookmarks
+        }
+    }
+
+    fun openBookmarkedMessage(bookmark: BookmarkedMessage) {
+        jumpToSearchResult(bookmark.message)
+    }
+
+    fun openGallery() {
+        val chat = selectedChat ?: return
+        galleryMessages = emptyList()
+        galleryHasMore = false
+        screen = NavigationScreen.Gallery
+        viewModelScope.launch {
+            val rows = withContext(Dispatchers.IO) { db.mediaMessages(chat.id, GALLERY_PAGE, 0) }
+            galleryMessages = rows
+            galleryHasMore = rows.size == GALLERY_PAGE
+        }
+    }
+
+    fun loadMoreGallery() {
+        val chat = selectedChat ?: return
+        if (galleryLoading || !galleryHasMore) return
+        galleryLoading = true
+        viewModelScope.launch {
+            val rows = withContext(Dispatchers.IO) { db.mediaMessages(chat.id, GALLERY_PAGE, galleryMessages.size) }
+            galleryMessages = (galleryMessages + rows).distinctBy { it.id }
+            galleryHasMore = rows.size == GALLERY_PAGE
+            galleryLoading = false
+        }
+    }
+
+    fun openMessageFromGallery(message: Message) {
+        jumpToSearchResult(message)
+    }
+
+    fun exportBackup(uri: Uri, passphrase: String?) {
+        if (backupBusy) return
+        backupBusy = true
+        backupMessage = null
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    runCatching { db.readableDatabase.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { } }
+                    val dbFile = appContext.getDatabasePath(DATABASE_NAME)
+                    appContext.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                        ArchiveBackup.exportBackup(dbFile, out, passphrase)
+                    } ?: error("Unable to open backup destination")
+                }
+            }
+            backupBusy = false
+            backupMessage = result.fold({ "Backup saved" }, { it.userFacingMessage("Backup failed") })
+        }
+    }
+
+    fun restoreBackup(uri: Uri, passphrase: String?) {
+        if (backupBusy) return
+        if (importPhase in setOf("downloading", "indexing")) {
+            backupMessage = "Wait for the running import to finish before restoring"
+            return
+        }
+        backupBusy = true
+        backupMessage = null
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dbFile = appContext.getDatabasePath(DATABASE_NAME)
+                    appContext.contentResolver.openInputStream(uri)?.use { input ->
+                        ArchiveBackup.restoreBackup(input, passphrase, dbFile)
+                    } ?: error("Unable to open backup file")
+                }
+            }
+            result.onSuccess {
+                withContext(Dispatchers.IO) {
+                    db.close()
+                    File(appContext.getDatabasePath(DATABASE_NAME).path + "-wal").delete()
+                    File(appContext.getDatabasePath(DATABASE_NAME).path + "-shm").delete()
+                    db = ArchiveDb(appContext)
+                    chatSearch = ChatSearch(db)
+                    db.ensureSearchIndex()
+                    chats = db.chats()
+                }
+                selectedChat = null
+                messages = emptyList()
+                bookmarksList = emptyList()
+                searchResults = emptyList()
+                backupMessage = "Backup restored"
+                screen = NavigationScreen.Home
+            }.onFailure {
+                backupMessage = it.userFacingMessage("Restore failed")
+            }
+            backupBusy = false
+        }
     }
 
     fun consumeFocusMessage() {
@@ -557,12 +811,18 @@ class TarVm : ViewModel() {
                 importStatus = status.message
                 importError = status.error
                 if (status.phase == "complete") {
-                    chats = withContext(Dispatchers.IO) { db.chats() }
+                    // A restore can briefly swap the db instance; skip a failed refresh.
+                    chats = withContext(Dispatchers.IO) { runCatching { db.chats() }.getOrNull() } ?: chats
                     if (screen == NavigationScreen.ImportProgress) screen = NavigationScreen.Home
                 }
                 delay(700)
             }
         }
+    }
+
+    companion object {
+        private const val DATABASE_NAME = "tarjs_archive.db"
+        private const val GALLERY_PAGE = 60
     }
 
     override fun onCleared() {

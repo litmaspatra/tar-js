@@ -36,6 +36,16 @@ data class Message(
     val durationSeconds: Long? = null
 )
 
+data class SearchFilter(
+    val sender: String? = null,
+    val afterDate: Long? = null,
+    val beforeDate: Long? = null,
+    val mediaType: String? = null,
+    val mediaOnly: Boolean = false
+)
+
+data class BookmarkedMessage(val message: Message, val chatTitle: String)
+
 data class ImportResult(
     val chats: Int,
     val messages: Int,
@@ -58,7 +68,7 @@ data class AvatarPreference(
  * and enforcing uniqueness on (chat_id, message_id), and adds per-chat UI
  * preferences plus media metadata needed by the native renderer.
  */
-class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : SQLiteOpenHelper(context, databaseName, null, 6) {
+class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : SQLiteOpenHelper(context, databaseName, null, 7) {
 
     override fun onCreate(db: SQLiteDatabase) {
         createChats(db)
@@ -66,6 +76,7 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
         createPreferences(db)
         createIndexes(db)
         createSearchIndex(db)
+        createBookmarks(db)
     }
 
     private fun createChats(db: SQLiteDatabase) {
@@ -121,7 +132,9 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
                 custom_avatar_path TEXT,
                 avatar_zoom REAL NOT NULL DEFAULT 1.0,
                 avatar_offset_x REAL NOT NULL DEFAULT 0.0,
-                avatar_offset_y REAL NOT NULL DEFAULT 0.0
+                avatar_offset_y REAL NOT NULL DEFAULT 0.0,
+                last_read_message_id INTEGER,
+                last_read_date_unix INTEGER
             )
             """.trimIndent()
         )
@@ -134,6 +147,19 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
 
     private fun createSearchIndex(db: SQLiteDatabase) {
         db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts4(text, sender, file_name, tokenize=unicode61)")
+    }
+
+    private fun createBookmarks(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS bookmarks(
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY(chat_id, message_id)
+            )
+            """.trimIndent()
+        )
     }
 
     private fun rebuildSearchIndex(db: SQLiteDatabase) {
@@ -204,6 +230,11 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
             createSearchIndex(db)
             db.execSQL("INSERT INTO messages_fts(docid,text,sender,file_name) SELECT row_id,text,sender,COALESCE(file_name,'') FROM messages")
         }
+        if (oldVersion < 7) {
+            createBookmarks(db)
+            runCatching { db.execSQL("ALTER TABLE chat_preferences ADD COLUMN last_read_message_id INTEGER") }
+            runCatching { db.execSQL("ALTER TABLE chat_preferences ADD COLUMN last_read_date_unix INTEGER") }
+        }
     }
 
     fun chats(): List<Chat> = readableDatabase.rawQuery(
@@ -228,7 +259,9 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
         query: String = "",
         olderThanDate: Long? = null,
         newerThanDate: Long? = null,
-        limit: Int = 50
+        limit: Int = 50,
+        olderThanMessageId: Long? = null,
+        newerThanMessageId: Long? = null
     ): List<Message> {
         require(olderThanDate == null || newerThanDate == null) { "Use only one paging direction at a time" }
         val where = mutableListOf("chat_id = ?")
@@ -237,8 +270,28 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
             where += "text LIKE ? COLLATE NOCASE"
             args += "%${query.trim()}%"
         }
-        olderThanDate?.let { where += "date_unix < ?"; args += it.toString() }
-        newerThanDate?.let { where += "date_unix > ?"; args += it.toString() }
+        if (olderThanDate != null) {
+            if (olderThanMessageId != null) {
+                where += "(date_unix < ? OR (date_unix = ? AND message_id < ?))"
+                args += olderThanDate.toString()
+                args += olderThanDate.toString()
+                args += olderThanMessageId.toString()
+            } else {
+                where += "date_unix < ?"
+                args += olderThanDate.toString()
+            }
+        }
+        if (newerThanDate != null) {
+            if (newerThanMessageId != null) {
+                where += "(date_unix > ? OR (date_unix = ? AND message_id > ?))"
+                args += newerThanDate.toString()
+                args += newerThanDate.toString()
+                args += newerThanMessageId.toString()
+            } else {
+                where += "date_unix > ?"
+                args += newerThanDate.toString()
+            }
+        }
         val descending = olderThanDate != null
         val order = if (descending) "date_unix DESC, message_id DESC" else "date_unix ASC, message_id ASC"
         val rows = queryMessages(
@@ -248,22 +301,53 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
         return if (descending) rows.reversed() else rows
     }
 
-    fun searchMessages(chatId: Long, query: String, limit: Int = 100): List<Message> {
-        if (query.isBlank()) return emptyList()
+    fun searchMessages(chatId: Long, query: String, limit: Int = 100): List<Message> =
+        searchMessages(chatId = chatId, query = query, filter = SearchFilter(), newestFirst = false, limit = limit, offset = 0)
+
+    /**
+     * Full-history message search, optionally archive-wide (chatId = null) and
+     * refined by sender/date/media filters. FTS4 prefix matching; terms are
+     * reduced to letters, digits and underscore before the bound MATCH argument.
+     */
+    fun searchMessages(
+        chatId: Long?,
+        query: String,
+        filter: SearchFilter = SearchFilter(),
+        newestFirst: Boolean = false,
+        limit: Int = 150,
+        offset: Int = 0
+    ): List<Message> {
         val terms = query.trim().split(Regex("\\s+"))
             .map { it.replace(Regex("[^\\p{L}\\p{N}_]"), "") }
             .filter(String::isNotBlank)
-        if (terms.isEmpty()) return emptyList()
-        // FTS4 treats whitespace as an implicit AND. The explicit AND keyword is
-        // not enabled by every Android SQLite build and can be parsed as a token.
-        val match = terms.joinToString(" ") { "$it*" }
-        return runCatching {
-            queryMessages(
-                "SELECT ${messageColumns("m")} FROM messages m WHERE m.chat_id=? AND m.row_id IN (SELECT docid FROM messages_fts WHERE messages_fts MATCH ?) ORDER BY m.date_unix ASC,m.message_id ASC LIMIT ?",
-                listOf(chatId.toString(), match, limit.coerceIn(1, 300).toString())
-            )
-        }.getOrElse {
-            messages(chatId = chatId, query = query, limit = limit.coerceIn(1, 300))
+        if (query.isNotBlank() && terms.isEmpty()) return emptyList()
+        val where = mutableListOf<String>()
+        val args = mutableListOf<String>()
+        if (chatId != null) {
+            where += "m.chat_id=?"
+            args += chatId.toString()
+        }
+        if (terms.isNotEmpty()) {
+            // FTS4 treats whitespace as an implicit AND. The explicit AND keyword is
+            // not enabled by every Android SQLite build and can be parsed as a token.
+            where += "m.row_id IN (SELECT docid FROM messages_fts WHERE messages_fts MATCH ?)"
+            args += terms.joinToString(" ") { "$it*" }
+        }
+        filter.sender?.takeIf(String::isNotBlank)?.let {
+            where += "m.sender LIKE ? COLLATE NOCASE"
+            args += "%${it.trim()}%"
+        }
+        filter.afterDate?.let { where += "m.date_unix>=?"; args += it.toString() }
+        filter.beforeDate?.let { where += "m.date_unix<=?"; args += it.toString() }
+        filter.mediaType?.let { where += "m.media_type=?"; args += it }
+        if (filter.mediaOnly) where += "m.media_path IS NOT NULL"
+        if (where.isEmpty()) return emptyList()
+        val order = if (newestFirst) "m.date_unix DESC,m.message_id DESC" else "m.date_unix ASC,m.message_id ASC"
+        val sql = "SELECT ${messageColumns("m")} FROM messages m WHERE ${where.joinToString(" AND ")} ORDER BY $order LIMIT ? OFFSET ?"
+        args += limit.coerceIn(1, 300).toString()
+        args += offset.coerceAtLeast(0).toString()
+        return runCatching { queryMessages(sql, args) }.getOrElse {
+            if (chatId != null && terms.isNotEmpty()) messages(chatId = chatId, query = query, limit = limit.coerceIn(1, 300)) else emptyList()
         }
     }
 
@@ -275,21 +359,33 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
     fun messageWindow(chatId: Long, messageId: Long, before: Int = 40, after: Int = 40): List<Message> {
         val targetDate = messageDate(chatId, messageId) ?: return emptyList()
         val olderAndTarget = queryMessages(
-            "SELECT ${messageColumns()} FROM messages WHERE chat_id=? AND date_unix<=? ORDER BY date_unix DESC, message_id DESC LIMIT ?",
-            listOf(chatId.toString(), targetDate.toString(), (before + 1).coerceAtLeast(1).toString())
+            "SELECT ${messageColumns()} FROM messages WHERE chat_id=? AND (date_unix<? OR (date_unix=? AND message_id<=?)) ORDER BY date_unix DESC, message_id DESC LIMIT ?",
+            listOf(chatId.toString(), targetDate.toString(), targetDate.toString(), messageId.toString(), (before + 1).coerceAtLeast(1).toString())
         ).reversed()
-        val newer = messages(chatId, newerThanDate = targetDate, limit = after)
+        val newer = if (after <= 0) emptyList() else messages(chatId, newerThanDate = targetDate, newerThanMessageId = messageId, limit = after)
         return (olderAndTarget + newer).distinctBy { it.id }
     }
 
-    fun hasOlderMessages(chatId: Long, beforeDate: Long): Boolean = exists(
-        "SELECT 1 FROM messages WHERE chat_id=? AND date_unix<? LIMIT 1",
-        arrayOf(chatId.toString(), beforeDate.toString())
+    fun hasOlderMessages(chatId: Long, beforeDate: Long, beforeMessageId: Long? = null): Boolean = exists(
+        if (beforeMessageId != null)
+            "SELECT 1 FROM messages WHERE chat_id=? AND (date_unix<? OR (date_unix=? AND message_id<?)) LIMIT 1"
+        else
+            "SELECT 1 FROM messages WHERE chat_id=? AND date_unix<? LIMIT 1",
+        if (beforeMessageId != null)
+            arrayOf(chatId.toString(), beforeDate.toString(), beforeDate.toString(), beforeMessageId.toString())
+        else
+            arrayOf(chatId.toString(), beforeDate.toString())
     )
 
-    fun hasNewerMessages(chatId: Long, afterDate: Long): Boolean = exists(
-        "SELECT 1 FROM messages WHERE chat_id=? AND date_unix>? LIMIT 1",
-        arrayOf(chatId.toString(), afterDate.toString())
+    fun hasNewerMessages(chatId: Long, afterDate: Long, afterMessageId: Long? = null): Boolean = exists(
+        if (afterMessageId != null)
+            "SELECT 1 FROM messages WHERE chat_id=? AND (date_unix>? OR (date_unix=? AND message_id>?)) LIMIT 1"
+        else
+            "SELECT 1 FROM messages WHERE chat_id=? AND date_unix>? LIMIT 1",
+        if (afterMessageId != null)
+            arrayOf(chatId.toString(), afterDate.toString(), afterDate.toString(), afterMessageId.toString())
+        else
+            arrayOf(chatId.toString(), afterDate.toString())
     )
 
     private fun exists(sql: String, args: Array<String>): Boolean = readableDatabase.rawQuery(sql, args).use { it.moveToFirst() }
@@ -368,6 +464,116 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
         db.update("chat_preferences", values, "chat_id=?", arrayOf(chatId.toString()))
     }
 
+    fun firstMessage(chatId: Long): Message? = queryMessages(
+        "SELECT ${messageColumns()} FROM messages WHERE chat_id=? ORDER BY date_unix ASC, message_id ASC LIMIT 1",
+        listOf(chatId.toString())
+    ).firstOrNull()
+
+    fun lastMessage(chatId: Long): Message? = queryMessages(
+        "SELECT ${messageColumns()} FROM messages WHERE chat_id=? ORDER BY date_unix DESC, message_id DESC LIMIT 1",
+        listOf(chatId.toString())
+    ).firstOrNull()
+
+    fun firstMessageOnOrAfter(chatId: Long, dateUnix: Long): Message? = queryMessages(
+        "SELECT ${messageColumns()} FROM messages WHERE chat_id=? AND date_unix>=? ORDER BY date_unix ASC, message_id ASC LIMIT 1",
+        listOf(chatId.toString(), dateUnix.toString())
+    ).firstOrNull()
+
+    fun messageCount(chatId: Long): Long = readableDatabase.compileStatement(
+        "SELECT COUNT(*) FROM messages WHERE chat_id=?"
+    ).apply { bindLong(1, chatId) }.simpleQueryForLong()
+
+    fun senders(chatId: Long? = null): List<String> {
+        val sql = if (chatId != null) "SELECT DISTINCT sender FROM messages WHERE chat_id=? ORDER BY sender" else "SELECT DISTINCT sender FROM messages ORDER BY sender"
+        val args = if (chatId != null) arrayOf(chatId.toString()) else null
+        return readableDatabase.rawQuery(sql, args).use { c ->
+            buildList { while (c.moveToNext()) add(c.getString(0)) }
+        }
+    }
+
+    fun mediaMessages(chatId: Long, limit: Int, offset: Int): List<Message> = queryMessages(
+        "SELECT ${messageColumns()} FROM messages WHERE chat_id=? AND media_path IS NOT NULL ORDER BY date_unix DESC, message_id DESC LIMIT ? OFFSET ?",
+        listOf(chatId.toString(), limit.coerceIn(1, 200).toString(), offset.coerceAtLeast(0).toString())
+    )
+
+    /**
+     * Rebuilds the FTS search index when it has drifted from the messages table,
+     * which an interrupted import can leave behind (messages visible, but missing
+     * from search). Returns true when a rebuild happened.
+     */
+    fun ensureSearchIndex(): Boolean {
+        val db = writableDatabase
+        createSearchIndex(db)
+        val messageCount = db.compileStatement("SELECT COUNT(*) FROM messages").simpleQueryForLong()
+        val ftsCount = db.compileStatement("SELECT COUNT(*) FROM messages_fts").simpleQueryForLong()
+        if (messageCount == ftsCount) return false
+        rebuildSearchIndex(db)
+        return true
+    }
+
+    fun addBookmark(chatId: Long, messageId: Long) {
+        writableDatabase.execSQL(
+            "INSERT OR IGNORE INTO bookmarks(chat_id,message_id,created_at) VALUES(?,?,?)",
+            arrayOf(chatId, messageId, System.currentTimeMillis())
+        )
+    }
+
+    fun removeBookmark(chatId: Long, messageId: Long) {
+        writableDatabase.execSQL("DELETE FROM bookmarks WHERE chat_id=? AND message_id=?", arrayOf(chatId, messageId))
+    }
+
+    fun isBookmarked(chatId: Long, messageId: Long): Boolean = exists(
+        "SELECT 1 FROM bookmarks WHERE chat_id=? AND message_id=? LIMIT 1",
+        arrayOf(chatId.toString(), messageId.toString())
+    )
+
+    fun bookmarkedIds(chatId: Long): Set<Long> = readableDatabase.rawQuery(
+        "SELECT message_id FROM bookmarks WHERE chat_id=?", arrayOf(chatId.toString())
+    ).use { c -> buildSet { while (c.moveToNext()) add(c.getLong(0)) } }
+
+    fun bookmarks(): List<BookmarkedMessage> = readableDatabase.rawQuery(
+        "SELECT ${messageColumns("m")}, c.title FROM bookmarks b JOIN messages m ON m.chat_id=b.chat_id AND m.message_id=b.message_id JOIN chats c ON c.id=b.chat_id ORDER BY b.created_at DESC",
+        null
+    ).use { c ->
+        buildList {
+            while (c.moveToNext()) {
+                add(
+                    BookmarkedMessage(
+                        Message(
+                            id = c.getLong(0), chatId = c.getLong(1), sender = c.getString(2), text = c.getString(3),
+                            date = c.getString(4), dateUnix = c.getLong(5), mine = c.getInt(6) != 0,
+                            replyToId = if (c.isNull(7)) null else c.getLong(7), isForwarded = c.getInt(8) != 0,
+                            isEdited = c.getInt(9) != 0, isService = c.getInt(10) != 0,
+                            mediaPath = if (c.isNull(11)) null else c.getString(11),
+                            mediaType = if (c.isNull(12)) null else c.getString(12),
+                            fileName = if (c.isNull(13)) null else c.getString(13),
+                            mimeType = if (c.isNull(14)) null else c.getString(14),
+                            durationSeconds = if (c.isNull(15)) null else c.getLong(15)
+                        ),
+                        c.getString(16)
+                    )
+                )
+            }
+        }
+    }
+
+    fun setReadingPosition(chatId: Long, messageId: Long, dateUnix: Long) {
+        upsertPreference(
+            chatId,
+            ContentValues().apply {
+                put("last_read_message_id", messageId)
+                put("last_read_date_unix", dateUnix)
+            }
+        )
+    }
+
+    fun readingPosition(chatId: Long): Pair<Long, Long>? = readableDatabase.rawQuery(
+        "SELECT last_read_message_id, last_read_date_unix FROM chat_preferences WHERE chat_id=?",
+        arrayOf(chatId.toString())
+    ).use { c ->
+        if (c.moveToFirst() && !c.isNull(0) && !c.isNull(1)) c.getLong(0) to c.getLong(1) else null
+    }
+
     fun clear() = writableDatabase.apply {
         beginTransaction()
         try {
@@ -375,6 +581,7 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
             execSQL("DELETE FROM messages")
             execSQL("DELETE FROM chats")
             execSQL("DELETE FROM chat_preferences")
+            execSQL("DELETE FROM bookmarks")
             setTransactionSuccessful()
         } finally { endTransaction() }
     }

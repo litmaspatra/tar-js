@@ -89,7 +89,8 @@ class ArchiveImportService : Service() {
                     }
                 )
                 if (result.error != null) error(result.error)
-                writeStatus(this, ImportStatus("complete", result.messages, result.messages, "Indexed ${result.messages} messages", null))
+                archiveDb.ensureSearchIndex()
+                writeStatus(this, ImportStatus("complete", result.messages, result.messages, "Indexed ${result.messages} messages - search ready", null))
                 getSystemService(NotificationManager::class.java).notify(
                     COMPLETE_NOTIFICATION_ID,
                     notification("TAR-JS indexing complete", "${result.messages} messages are ready", result.messages, result.messages, complete = true)
