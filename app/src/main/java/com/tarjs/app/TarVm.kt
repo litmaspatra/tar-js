@@ -145,6 +145,7 @@ class TarVm : ViewModel() {
         chatSearch = ChatSearch(db)
         configManager = RcloneConfigManager(appContext)
         passwordManager = RclonePasswordManager(appContext)
+        RcloneRuntime.configureReadOnlyGuard(appContext.dataDir)
         lockState = lock.state
         failureCount = lock.failureCount
         chats = db.chats()

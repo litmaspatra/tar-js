@@ -27,6 +27,7 @@ class ArchiveImportService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        RcloneRuntime.configureReadOnlyGuard(applicationContext.dataDir)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

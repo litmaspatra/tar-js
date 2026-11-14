@@ -149,14 +149,43 @@ object RcloneRuntime {
         "operations/copyfile"
     )
 
+    /**
+     * Root directory every local copy destination must stay inside. Set by the
+     * app before any rclone call; copies are refused while unset.
+     */
+    @Volatile
+    internal var allowedLocalRoot: File? = null
+
+    fun configureReadOnlyGuard(localRoot: File) {
+        allowedLocalRoot = localRoot
+    }
+
     internal fun checkReadOnlyOperation(method: String, params: JSONObject) {
         require(method in allowedRpcMethods) { "rclone operation '$method' is blocked: TAR-JS never modifies remote storage" }
-        if (method == "operations/copyfile") {
-            // Copying is only ever remote -> local. A remote destination fs
-            // (containing ':' like 'b2:bucket') must be rejected outright.
-            val dstFs = params.optString("dstFs")
-            require(dstFs.startsWith("/")) { "rclone copy destination must be a local app directory" }
-            require(!params.optString("srcFs").startsWith("/")) { "rclone copy source must be a configured remote" }
+        when (method) {
+            "operations/copyfile" -> {
+                // Copying is only ever remote -> local. A remote destination fs
+                // (containing ':' like 'b2:bucket') must be rejected outright,
+                // and the local destination must resolve (canonically, so no
+                // traversal or symlink escape) inside the app's own directory.
+                val dstFs = params.optString("dstFs")
+                require(dstFs.startsWith("/")) { "rclone copy destination must be a local app directory" }
+                require(!params.optString("srcFs").startsWith("/")) { "rclone copy source must be a configured remote" }
+                val root = allowedLocalRoot ?: error("rclone local copy boundary is not configured")
+                val rootPath = root.canonicalFile.path
+                val dstPath = File(dstFs).canonicalFile.path
+                require(dstPath == rootPath || dstPath.startsWith(rootPath + File.separator)) {
+                    "rclone copy destination escapes the app directory"
+                }
+            }
+            "options/set" -> {
+                // Only flipping the interactive-password prompt is permitted;
+                // arbitrary runtime option changes are not.
+                val main = params.optJSONObject("main")
+                require(params.length() == 1 && main != null && main.length() == 1 && main.has("AskPassword")) {
+                    "only the rclone AskPassword option may be changed"
+                }
+            }
         }
     }
 
