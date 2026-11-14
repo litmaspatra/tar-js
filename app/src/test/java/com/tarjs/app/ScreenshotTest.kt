@@ -79,7 +79,7 @@ class ScreenshotTest {
             return """{"personal_information": {"user_id": "user_owner", "first_name": "Kartik"}, "chats": {"list": [
                 {"id": 100, "name": "Road Trip Crew", "type": "basic_group", "messages": [$messages]},
                 {"id": 200, "name": "Family", "type": "personal_chat", "messages": [$family]}
-            ]}""".replace("\n", "")
+            ]}}""".replace("\n", "")
         }
     }
 
