@@ -15,6 +15,7 @@ android { namespace = "com.tarjs.app"; compileSdk = 35
         ndk { abiFilters += "arm64-v8a" }
     }
     buildFeatures { compose = true }
+    testOptions { unitTests.isIncludeAndroidResources = true }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
         jniLibs.useLegacyPackaging = true

@@ -4,15 +4,17 @@ import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.lifecycle.ViewModelProvider
+import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.tarjs.app.core.ArchiveDb
 import java.io.File
 import java.io.FileOutputStream
-import org.junit.BeforeClass
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,22 +27,31 @@ import org.robolectric.annotation.GraphicsMode
 class ScreenshotTest {
 
     @get:Rule
-    val composeRule = createAndroidComposeRule<MainActivity>()
+    val composeRule = createEmptyComposeRule()
+
+    private lateinit var scenario: ActivityScenario<MainActivity>
+    private lateinit var vm: TarVm
+
+    @Before
+    fun seedArchiveAndLaunch() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase("tarjs_archive.db")
+        val db = ArchiveDb(context)
+        val result = db.importJson(fixtureJson()) { _, _ -> }
+        check(result.error == null) { "Fixture import failed: ${result.error}" }
+        db.addBookmark(100, 40)
+        db.addBookmark(200, 5)
+        db.close()
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+        scenario.onActivity { vm = ViewModelProvider(it)[TarVm::class.java] }
+    }
+
+    @After
+    fun closeActivity() {
+        scenario.close()
+    }
 
     companion object {
-        @BeforeClass
-        @JvmStatic
-        fun seedArchive() {
-            val context = ApplicationProvider.getApplicationContext<Context>()
-            context.deleteDatabase("tarjs_archive.db")
-            val db = ArchiveDb(context)
-            val result = db.importJson(fixtureJson()) { _, _ -> }
-            check(result.error == null) { "Fixture import failed: ${result.error}" }
-            db.addBookmark(100, 40)
-            db.addBookmark(200, 5)
-            db.close()
-        }
-
         private fun fixtureJson(): String {
             val messages = StringBuilder()
             for (i in 1..240) {
@@ -64,9 +75,6 @@ class ScreenshotTest {
             ]}""".replace("\n", "")
         }
     }
-
-    private val vm: TarVm
-        get() = ViewModelProvider(composeRule.activity)[TarVm::class.java]
 
     private fun save(name: String) {
         composeRule.waitForIdle()
