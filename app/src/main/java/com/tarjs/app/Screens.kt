@@ -1067,7 +1067,7 @@ private fun GalleryCell(vm: TarVm, message: Message) {
     }
 }
 
-private fun decodeSampledBitmap(context: Context, uri: Uri, maxDimension: Int): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+internal fun decodeSampledBitmap(context: Context, uri: Uri, maxDimension: Int): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null

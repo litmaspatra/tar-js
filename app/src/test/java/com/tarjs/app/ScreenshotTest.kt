@@ -207,5 +207,11 @@ class ScreenshotTest {
         pumpUntil(10_000) { vm.screen == NavigationScreen.Gallery && vm.galleryMessages.isNotEmpty() }
         settle()
         save("08-gallery")
+
+        // tapping a tile must return to the chat landed on the original message
+        composeRule.onNodeWithText("road_trip_240.jpg").performClick()
+        pumpUntil(10_000) { vm.screen == NavigationScreen.Chat && vm.messages.any { it.id == 240L } }
+        settle()
+        save("09-gallery-to-message")
     }
 }
