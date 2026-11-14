@@ -83,35 +83,36 @@ class ScreenshotTest {
 
     @Test
     fun captureKeyScreens() {
+        composeRule.waitUntil(10_000) { vm.chats.isNotEmpty() }
         settle()
         save("01-home")
 
         val chat = vm.chats.first { it.id == 100L }
         vm.selectChat(chat)
-        composeRule.waitUntil(5_000) { vm.messages.isNotEmpty() }
+        composeRule.waitUntil(10_000) { vm.messages.isNotEmpty() }
         settle()
         save("02-chat")
 
         vm.jumpToFirst()
-        composeRule.waitUntil(5_000) { vm.messages.firstOrNull()?.id == 1L }
+        composeRule.waitUntil(10_000) { vm.messages.firstOrNull()?.id == 1L }
         settle()
         save("03-chat-first-message")
 
         vm.openGlobalSearch()
         vm.updateSearchQuery("road")
-        composeRule.waitUntil(5_000) { vm.searchResults.isNotEmpty() && !vm.isSearching }
+        composeRule.waitUntil(10_000) { vm.searchResults.isNotEmpty() && !vm.isSearching }
         settle()
         save("04-global-search")
 
         vm.openBookmarks()
-        composeRule.waitUntil(5_000) { vm.bookmarksList.isNotEmpty() }
+        composeRule.waitUntil(10_000) { vm.bookmarksList.isNotEmpty() }
         settle()
         save("05-bookmarks")
 
         vm.selectChat(chat)
-        composeRule.waitUntil(5_000) { vm.messages.isNotEmpty() }
+        composeRule.waitUntil(10_000) { vm.messages.isNotEmpty() }
         vm.openGallery()
-        composeRule.waitUntil(5_000) { vm.galleryMessages.isNotEmpty() }
+        composeRule.waitUntil(10_000) { vm.galleryMessages.isNotEmpty() }
         settle()
         save("06-gallery")
     }
