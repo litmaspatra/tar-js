@@ -49,10 +49,10 @@ class ChatSearchTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val scope = CoroutineScope(dispatcher)
 
-        val first = async(dispatcher) { search.search(100, "hello", scope) }
+        val first = async(dispatcher) { search.search(100, "hello", SearchFilter(), false, scope) }
         runCurrent()
         advanceTimeBy(100)
-        val last = async(dispatcher) { search.search(100, "newest", scope) }
+        val last = async(dispatcher) { search.search(100, "newest", SearchFilter(), false, scope) }
         runCurrent()
         advanceTimeBy(ChatSearch.DEBOUNCE_MS + 1)
         advanceUntilIdle()
@@ -67,9 +67,9 @@ class ChatSearchTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val scope = CoroutineScope(dispatcher)
 
-        val stale = async(dispatcher) { search.search(100, "hello owner", scope) }
+        val stale = async(dispatcher) { search.search(100, "hello owner", SearchFilter(), false, scope) }
         runCurrent()
-        val fresh = async(dispatcher) { search.search(100, "middle", scope) }
+        val fresh = async(dispatcher) { search.search(100, "middle", SearchFilter(), false, scope) }
         runCurrent()
         advanceTimeBy(ChatSearch.DEBOUNCE_MS + 1)
         advanceUntilIdle()
@@ -89,23 +89,32 @@ class ChatSearchTest {
     }
 
     @Test
-    fun hasOlderHasNewerFlagsCorrect() = runTest {
-        val oldest = async { search.search(100, "hello owner", this@runTest) }
-        advanceTimeBy(ChatSearch.DEBOUNCE_MS + 1)
-        advanceUntilIdle()
-        assertFalse(oldest.await().hasOlder)
-        assertTrue(oldest.await().hasNewer)
+    fun searchReportsHasMoreAndPagesFurtherResults() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = CoroutineScope(dispatcher)
 
-        val middle = async { search.search(100, "middle", this@runTest) }
+        val state = async(dispatcher) { search.search(100, "hello owner", SearchFilter(), false, scope) }
+        runCurrent()
         advanceTimeBy(ChatSearch.DEBOUNCE_MS + 1)
         advanceUntilIdle()
-        assertTrue(middle.await().hasOlder)
-        assertTrue(middle.await().hasNewer)
+        val first = state.await()
+        assertNull(first.error)
+        assertFalse(first.hasMore)
+        assertTrue(first.results.isNotEmpty())
 
-        val newest = async { search.search(100, "newest", this@runTest) }
-        advanceTimeBy(ChatSearch.DEBOUNCE_MS + 1)
+        val page = search.searchPage(100, "hello owner", SearchFilter(), false, first.results.size, scope)
         advanceUntilIdle()
-        assertTrue(newest.await().hasOlder)
-        assertFalse(newest.await().hasNewer)
+        assertFalse(page.hasMore)
+        assertTrue(page.results.isEmpty())
+    }
+
+    @Test
+    fun jumpToFirstAndLatestCoverChatEnds() = runTest {
+        val first = search.jumpToFirst(100, this)
+        assertEquals(1L, first.first().id)
+        assertTrue(first.none { it.id > 4L })
+
+        val latest = search.jumpToLatest(100, this)
+        assertEquals(4L, latest.last().id)
     }
 }
