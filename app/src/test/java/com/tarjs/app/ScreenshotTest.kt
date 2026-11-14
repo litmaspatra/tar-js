@@ -200,9 +200,11 @@ class ScreenshotTest {
 
         val chat = vm.chats.first { it.id == 100L }
         vm.selectChat(chat)
-        pumpUntil(10_000) { vm.messages.isNotEmpty() }
+        // wait for selectChat's coroutine to fully finish (it writes the screen last),
+        // otherwise its trailing screen write lands after openGallery and reverts to Chat
+        pumpUntil(10_000) { vm.screen == NavigationScreen.Chat && vm.messages.isNotEmpty() }
         vm.openGallery()
-        pumpUntil(10_000) { vm.galleryMessages.isNotEmpty() }
+        pumpUntil(10_000) { vm.screen == NavigationScreen.Gallery && vm.galleryMessages.isNotEmpty() }
         settle()
         save("08-gallery")
     }
