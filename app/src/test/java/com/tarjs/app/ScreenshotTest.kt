@@ -4,8 +4,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Looper
+import android.view.View
 import android.view.ViewGroup
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -102,6 +106,25 @@ class ScreenshotTest {
         check(file.length() > 0) { "screenshot $name empty" }
     }
 
+    private fun saveDialog(name: String, dialog: android.app.Dialog) {
+        val dir = File(System.getenv("SCREENSHOT_DIR") ?: "build/screenshots").also { it.mkdirs() }
+        val file = File(dir, "$name.png")
+        scenario.onActivity {
+            val view = dialog.window!!.decorView
+            val w = if (view.width > 0) view.width else 720
+            val h = if (view.height > 0) view.height else 960
+            view.measure(
+                View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY)
+            )
+            view.layout(0, 0, view.measuredWidth, view.measuredHeight)
+            val bitmap = Bitmap.createBitmap(view.measuredWidth, view.measuredHeight, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(bitmap))
+            FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        check(file.length() > 0) { "screenshot $name empty" }
+    }
+
     private fun settle() {
         pumpLooper()
         Thread.sleep(400)
@@ -120,7 +143,11 @@ class ScreenshotTest {
         val looper = Shadows.shadowOf(Looper.getMainLooper())
         var waited = 0L
         while (waited < timeoutMillis) {
+            // advance the paused looper clock so debounce delay() callbacks fire...
             looper.idleFor(100, TimeUnit.MILLISECONDS)
+            if (condition()) return
+            // ...but also let real time pass so Dispatchers.IO work can actually finish
+            Thread.sleep(50)
             if (condition()) return
             waited += 100
         }
@@ -133,33 +160,50 @@ class ScreenshotTest {
         settle()
         save("01-home")
 
-        val chat = vm.chats.first { it.id == 100L }
-        vm.selectChat(chat)
-        pumpUntil(10_000) { vm.messages.isNotEmpty() }
+        // open the chat through the UI list, not a direct VM call
+        composeRule.onNodeWithText("Road Trip Crew").performClick()
+        pumpUntil(10_000) { vm.selectedChat?.id == 100L && vm.messages.isNotEmpty() }
         settle()
         save("02-chat")
 
-        vm.jumpToFirst()
+        // jump to the first message through the chat overflow menu
+        composeRule.onNodeWithContentDescription("More").performClick()
+        composeRule.onNodeWithText("First message").performClick()
         pumpUntil(10_000) { vm.messages.firstOrNull()?.id == 1L }
         settle()
         save("03-chat-first-message")
+
+        // jump to date through the real platform date picker dialog
+        composeRule.onNodeWithContentDescription("More").performClick()
+        composeRule.onNodeWithText("Jump to date").performClick()
+        pumpUntil(5_000) { org.robolectric.shadows.ShadowDialog.getLatestDialog() is android.app.DatePickerDialog }
+        val picker = org.robolectric.shadows.ShadowDialog.getLatestDialog() as android.app.DatePickerDialog
+        saveDialog("04-jump-to-date-picker", picker)
+        picker.datePicker.updateDate(2024, 1, 14) // 14 February 2024 (month is 0-based)
+        picker.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
+        val target = java.time.LocalDate.of(2024, 2, 14)
+            .atStartOfDay(java.time.ZoneId.systemDefault()).toEpochSecond()
+        pumpUntil(10_000) { vm.messages.any { it.dateUnix in (target - 172800)..(target + 172800) } }
+        settle()
+        save("05-jump-to-date-landed")
 
         vm.openGlobalSearch()
         vm.updateSearchQuery("road")
         pumpUntil(10_000) { vm.searchResults.isNotEmpty() && !vm.isSearching }
         settle()
-        save("04-global-search")
+        save("06-global-search")
 
         vm.openBookmarks()
         pumpUntil(10_000) { vm.bookmarksList.isNotEmpty() }
         settle()
-        save("05-bookmarks")
+        save("07-bookmarks")
 
+        val chat = vm.chats.first { it.id == 100L }
         vm.selectChat(chat)
         pumpUntil(10_000) { vm.messages.isNotEmpty() }
         vm.openGallery()
         pumpUntil(10_000) { vm.galleryMessages.isNotEmpty() }
         settle()
-        save("06-gallery")
+        save("08-gallery")
     }
 }
