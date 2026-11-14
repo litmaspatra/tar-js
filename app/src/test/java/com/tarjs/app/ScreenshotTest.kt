@@ -18,6 +18,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.TimeUnit
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -108,21 +109,22 @@ class ScreenshotTest {
     }
 
     private fun pumpLooper() {
-        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(500, TimeUnit.MILLISECONDS)
         composeRule.waitForIdle()
     }
 
     // composeRule.waitUntil does not reliably run viewModelScope coroutines posted to the
-    // main looper under Robolectric, so pump the looper explicitly while polling.
+    // main looper under Robolectric, and plain idle() never advances the paused looper
+    // clock, so debounce delay() callbacks would never fire. Advance the clock while polling.
     private fun pumpUntil(timeoutMillis: Long, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-        while (System.currentTimeMillis() < deadline) {
-            Shadows.shadowOf(Looper.getMainLooper()).idle()
+        val looper = Shadows.shadowOf(Looper.getMainLooper())
+        var waited = 0L
+        while (waited < timeoutMillis) {
+            looper.idleFor(100, TimeUnit.MILLISECONDS)
             if (condition()) return
-            Thread.sleep(50)
+            waited += 100
         }
-        Shadows.shadowOf(Looper.getMainLooper()).idle()
-        check(condition()) { "condition not satisfied after ${timeoutMillis} ms" }
+        check(condition()) { "condition not satisfied after $timeoutMillis ms" }
     }
 
     @Test
