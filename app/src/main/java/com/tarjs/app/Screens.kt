@@ -1045,8 +1045,8 @@ private fun GalleryCell(vm: TarVm, message: Message) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Icon(
-                    when (message.mediaType) {
-                        "video" -> Icons.Default.PlayCircle
+                    when (message.mediaType?.takeIf { it.startsWith("video") || it == "animation" } ?: message.mediaType) {
+                        "video", "video_file", "video_message", "animation" -> Icons.Default.PlayCircle
                         "voice", "audio" -> Icons.Default.Mic
                         "sticker" -> Icons.Default.EmojiEmotions
                         "photo" -> Icons.Default.BrokenImage

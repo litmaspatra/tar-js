@@ -70,6 +70,20 @@ data class AvatarPreference(
  * and enforcing uniqueness on (chat_id, message_id), and adds per-chat UI
  * preferences plus media metadata needed by the native renderer.
  */
+/**
+ * SQL test for "this row is a sticker, not a real photo or video". Telegram
+ * exports store stickers under a stickers/ folder (.webp, .webm or animated
+ * .tgs) and tag them media_type=sticker. Rows under photos/ are never stickers,
+ * even if an older import labelled a .webp photo as one.
+ */
+internal fun stickerSql(prefix: String = ""): String {
+    val type = "LOWER(COALESCE(${prefix}media_type,''))"
+    val path = "LOWER(COALESCE(${prefix}media_path,''))"
+    return "(($path NOT LIKE 'photos/%' AND $path NOT LIKE '%/photos/%') AND " +
+        "($type LIKE 'sticker%' OR $path LIKE '%.tgs' OR $path LIKE 'stickers/%' OR $path LIKE '%/stickers/%'))"
+}
+private val STICKER_SQL = stickerSql()
+
 class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : SQLiteOpenHelper(context, databaseName, null, 7) {
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -342,7 +356,7 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
         filter.afterDate?.let { where += "m.date_unix>=?"; args += it.toString() }
         filter.beforeDate?.let { where += "m.date_unix<=?"; args += it.toString() }
         filter.mediaType?.let { where += "m.media_type=?"; args += it }
-        if (filter.mediaOnly) where += "m.media_path IS NOT NULL"
+        if (filter.mediaOnly) where += "m.media_path IS NOT NULL AND NOT (${stickerSql("m.")})"
         if (where.isEmpty()) return emptyList()
         val order = if (newestFirst) "m.date_unix DESC,m.message_id DESC" else "m.date_unix ASC,m.message_id ASC"
         val sql = "SELECT ${messageColumns("m")} FROM messages m WHERE ${where.joinToString(" AND ")} ORDER BY $order LIMIT ? OFFSET ?"
@@ -494,7 +508,7 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
     }
 
     fun mediaMessages(chatId: Long, limit: Int, offset: Int): List<Message> = queryMessages(
-        "SELECT ${messageColumns()} FROM messages WHERE chat_id=? AND media_path IS NOT NULL ORDER BY date_unix DESC, message_id DESC LIMIT ? OFFSET ?",
+        "SELECT ${messageColumns()} FROM messages WHERE chat_id=? AND media_path IS NOT NULL AND NOT ($STICKER_SQL) ORDER BY date_unix DESC, message_id DESC LIMIT ? OFFSET ?",
         listOf(chatId.toString(), limit.coerceIn(1, 200).toString(), offset.coerceAtLeast(0).toString())
     )
 
@@ -795,6 +809,7 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
                         ?: msg.optString("file").takeIf(String::isNotBlank)
                     val mime = msg.optString("mime_type").takeIf(String::isNotBlank)
                     val mediaType = msg.optString("media_type").takeIf(String::isNotBlank)
+                        ?: (if (msg.optString("photo").isNotBlank()) "photo" else null)
                         ?: inferMediaType(mediaPath, mime)
                     val fileName = msg.optString("file_name").takeIf(String::isNotBlank)
                         ?: mediaPath?.substringAfterLast('/')
@@ -839,9 +854,9 @@ class ArchiveDb(context: Context, databaseName: String = "tarjs_archive.db") : S
         val m = mime?.lowercase().orEmpty()
         return when {
             p.endsWith(".tgs") -> "sticker"
-            p.endsWith(".webp") -> "sticker"
+            p.endsWith(".webp") && p.contains("sticker") -> "sticker"
             p.endsWith(".webm") && p.contains("sticker") -> "sticker"
-            m.startsWith("image/") || p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png") -> "photo"
+            m.startsWith("image/") || p.endsWith(".webp") || p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png") -> "photo"
             m.startsWith("video/") || p.endsWith(".mp4") || p.endsWith(".webm") -> "video"
             m.startsWith("audio/") || p.endsWith(".ogg") || p.endsWith(".mp3") -> if (p.contains("voice")) "voice" else "audio"
             path != null -> "file"

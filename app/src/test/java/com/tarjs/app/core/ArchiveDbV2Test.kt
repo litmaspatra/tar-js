@@ -197,6 +197,31 @@ class ArchiveDbV2Test {
     }
 
     @Test
+    fun galleryExcludesStickersButKeepsRealMedia() {
+        val json = """{"personal_information": {"user_id": "me", "first_name": "Me"}, "chats": {"list": [
+          {"id": 300, "name": "Mix", "type": "personal_chat", "messages": [
+            {"id": 1, "type": "message", "from": "A", "from_id": "a", "date": "2026-01-01T00:00:01+00:00", "date_unixtime": 1001, "text": "", "photo": "photos/p1.jpg"},
+            {"id": 2, "type": "message", "from": "A", "from_id": "a", "date": "2026-01-01T00:00:02+00:00", "date_unixtime": 1002, "text": "", "photo": "photos/p2.webp"},
+            {"id": 3, "type": "message", "from": "A", "from_id": "a", "date": "2026-01-01T00:00:03+00:00", "date_unixtime": 1003, "text": "", "file": "video_files/v1.mp4", "media_type": "video_file", "mime_type": "video/mp4"},
+            {"id": 4, "type": "message", "from": "A", "from_id": "a", "date": "2026-01-01T00:00:04+00:00", "date_unixtime": 1004, "text": "x", "file": "stickers/s1.webp", "media_type": "sticker", "sticker_emoji": "x"},
+            {"id": 5, "type": "message", "from": "A", "from_id": "a", "date": "2026-01-01T00:00:05+00:00", "date_unixtime": 1005, "text": "x", "file": "stickers/s2.tgs", "media_type": "sticker"},
+            {"id": 6, "type": "message", "from": "A", "from_id": "a", "date": "2026-01-01T00:00:06+00:00", "date_unixtime": 1006, "text": "", "file": "stickers/s3.webm", "media_type": "sticker", "mime_type": "video/webm"},
+            {"id": 7, "type": "message", "from": "A", "from_id": "a", "date": "2026-01-01T00:00:07+00:00", "date_unixtime": 1007, "text": "", "file": "stickers/s4.webp"},
+            {"id": 8, "type": "message", "from": "A", "from_id": "a", "date": "2026-01-01T00:00:08+00:00", "date_unixtime": 1008, "text": "", "file": "files/pic.webp", "mime_type": "image/webp"}
+          ]}]}}"""
+        assertNull(importJson(json).error)
+        // Older imports labelled any .webp as a sticker, even real photos.
+        db.writableDatabase.execSQL("UPDATE messages SET media_type='sticker' WHERE chat_id=300 AND message_id IN (2,8)")
+        val ids = db.mediaMessages(300, 60, 0).map { it.id }.toSet()
+        assertEquals(setOf(1L, 2L, 3L, 8L), ids)
+        val any = db.searchMessages(300, "", SearchFilter(mediaOnly = true), newestFirst = false, limit = 50, offset = 0).map { it.id }.toSet()
+        assertEquals(setOf(1L, 2L, 3L, 8L), any)
+        val stickers = db.searchMessages(300, "", SearchFilter(mediaType = "sticker"), newestFirst = false, limit = 50, offset = 0).map { it.id }.toSet()
+        assertTrue(stickers.containsAll(setOf(4L, 5L, 6L, 7L)))
+        assertEquals(8L, db.messageCount(300))
+    }
+
+    @Test
     fun jumpToDateTargetsFirstMessageOnOrAfter() {
         importJson(twoChatsJson())
         assertEquals(1L, db.firstMessageOnOrAfter(100, 0)!!.id)

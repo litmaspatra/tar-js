@@ -17,6 +17,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.tarjs.app.core.ArchiveDb
 import java.io.File
 import java.io.FileOutputStream
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithText
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -69,7 +71,12 @@ class ScreenshotTest {
             val messages = StringBuilder()
             for (i in 1..240) {
                 if (i > 1) messages.append(',')
-                val media = if (i % 15 == 0) ", \"photo\": \"photos/road_trip_$i.jpg\", \"media_type\": \"photo\", \"file_name\": \"road_trip_$i.jpg\"" else ""
+                val media = when {
+                    i % 15 == 0 -> ", \"photo\": \"photos/road_trip_$i.jpg\", \"media_type\": \"photo\", \"file_name\": \"road_trip_$i.jpg\""
+                    i % 15 == 5 -> ", \"file\": \"stickers/sticker_$i.webp\", \"media_type\": \"sticker\", \"file_name\": \"sticker_$i.webp\""
+                    i % 45 == 10 -> ", \"file\": \"video_files/clip_$i.mp4\", \"media_type\": \"video_file\", \"file_name\": \"clip_$i.mp4\""
+                    else -> ""
+                }
                 val text = when {
                     i % 15 == 0 -> "road photo from day $i"
                     i % 7 == 0 -> "planning the road trip, day $i"
@@ -206,6 +213,9 @@ class ScreenshotTest {
         vm.openGallery()
         pumpUntil(10_000) { vm.screen == NavigationScreen.Gallery && vm.galleryMessages.isNotEmpty() }
         settle()
+        check(vm.galleryMessages.none { it.fileName?.startsWith("sticker_") == true }) { "stickers leaked into gallery" }
+        check(vm.galleryMessages.any { it.fileName?.startsWith("clip_") == true }) { "video missing from gallery" }
+        composeRule.onAllNodesWithText("sticker_230.webp").assertCountEquals(0)
         save("08-gallery")
 
         // tapping a tile must return to the chat landed on the original message

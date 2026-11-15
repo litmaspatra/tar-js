@@ -239,7 +239,7 @@ internal object TelegramArchiveStream {
         return TelegramMessageRecord(
             id, senderId, senderName, text, date, dateUnix, replyToId,
             forwarded, edited, service, path,
-            mediaType ?: inferMediaType(path, mimeType),
+            mediaType ?: (if (photo != null) "photo" else null) ?: inferMediaType(path, mimeType),
             fileName ?: path?.substringAfterLast('/'), mimeType, duration
         )
     }
@@ -341,9 +341,9 @@ internal object TelegramArchiveStream {
         val m = mime?.lowercase().orEmpty()
         return when {
             p.endsWith(".tgs") -> "sticker"
-            p.endsWith(".webp") -> "sticker"
+            p.endsWith(".webp") && p.contains("sticker") -> "sticker"
             p.endsWith(".webm") && p.contains("sticker") -> "sticker"
-            m.startsWith("image/") || p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png") -> "photo"
+            m.startsWith("image/") || p.endsWith(".webp") || p.endsWith(".jpg") || p.endsWith(".jpeg") || p.endsWith(".png") -> "photo"
             m.startsWith("video/") || p.endsWith(".mp4") || p.endsWith(".webm") -> "video"
             m.startsWith("audio/") || p.endsWith(".ogg") || p.endsWith(".opus") || p.endsWith(".mp3") ->
                 if (p.contains("voice")) "voice" else "audio"
